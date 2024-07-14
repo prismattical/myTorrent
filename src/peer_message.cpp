@@ -2,16 +2,17 @@
 
 #include "utils.hpp"
 
-#include <algorithm>
 #include <arpa/inet.h>
-#include <fstream>
-#include <iostream>
 #include <netinet/in.h>
 
+#include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace message
@@ -27,6 +28,41 @@ const std::vector<uint8_t> &Message::serialized() const
 Message::Message(std::vector<uint8_t> &&buffer)
 	: m_data(std::move(buffer))
 {
+}
+
+// Handshake
+
+Handshake::Handshake(std::vector<uint8_t> &&buffer)
+	: Message(std::move(buffer))
+{
+}
+
+Handshake::Handshake(const std::string &info_hash, const std::string &peer_id)
+	: Message([&info_hash, &peer_id]() mutable {
+		std::vector<uint8_t> ret(1 + 19 + 8 + 20 + 20);
+		const std::string_view str = "BitTorrent protocol";
+
+		ret[0] = 19;
+		std::copy(str.begin(), str.end(), ret.begin() + 1);
+		memset(ret.data() + 1 + 19, 0, 8);
+
+		assert(info_hash.size() == 20 && "info hash is not 20 characters");
+		assert(peer_id.size() == 20 && "peer id is not 20 characters");
+
+		std::copy(info_hash.begin(), info_hash.end(), ret.data() + 1 + 19 + 8);
+		std::copy(peer_id.begin(), peer_id.end(), ret.data() + 1 + 19 + 8 + 20);
+		return ret;
+	}())
+{
+}
+
+std::string Handshake::get_info_hash() const
+{
+	return { m_data.begin() + 1 + 19 + 8, m_data.begin() + 1 + 19 + 8 + 20 };
+}
+std::string Handshake::get_peer_id() const
+{
+	return { m_data.begin() + 1 + 19 + 8 + 20, m_data.end() };
 }
 
 // KeepAlive
@@ -232,6 +268,70 @@ Piece::Piece(std::vector<uint8_t> &&buffer)
 
 // Cancel
 
+Cancel::Cancel(std::vector<uint8_t> &&buffer)
+	: Message{ std::move(buffer) }
+{
+}
+
+Cancel::Cancel(uint32_t index, uint32_t begin, uint32_t length)
+	: Message{ [index, begin, length]() mutable {
+		std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x0D, 0x08, 0x00, 0x00, 0x00, 0x00,
+					  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+		index = htonl(index);
+		begin = htonl(begin);
+		length = htonl(length);
+
+		memcpy(ret.data() + 4 + 1, &index, sizeof index);
+		memcpy(ret.data() + 4 + 1 + 4, &begin, sizeof begin);
+		memcpy(ret.data() + 4 + 1 + 4 + 4, &length, sizeof length);
+
+		return ret;
+	}() }
+{
+}
+
+[[nodiscard]] uint32_t Cancel::get_index() const
+{
+	uint32_t index;
+	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
+	return ntohl(index);
+}
+void Cancel::set_index(uint32_t index)
+{
+	index = htonl(index);
+	memcpy(m_data.data() + 4 + 1, &index, sizeof index);
+}
+
+[[nodiscard]] uint32_t Cancel::get_begin() const
+{
+	uint32_t begin;
+	memcpy(&begin, m_data.data() + 4 + 1 + 4, sizeof begin);
+	return ntohl(begin);
+}
+void Cancel::set_begin(uint32_t begin)
+{
+	begin = htonl(begin);
+	memcpy(m_data.data() + 4 + 1 + 4, &begin, sizeof begin);
+}
+
+[[nodiscard]] uint32_t Cancel::get_length() const
+{
+	uint32_t length;
+	memcpy(&length, m_data.data() + 4 + 1 + 4 + 4, sizeof length);
+	return ntohl(length);
+}
+void Cancel::set_length(uint32_t length)
+{
+	length = htonl(length);
+	memcpy(m_data.data() + 4 + 1 + 4 + 4, &length, sizeof length);
+}
+
 // Port
+
+Port::Port(std::vector<uint8_t> &&buffer)
+	: Message(std::move(buffer))
+{
+}
 
 } // namespace message

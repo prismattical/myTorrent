@@ -3,6 +3,7 @@
 #include "bencode.hpp"
 #include "config.hpp"
 #include "peer_message.hpp"
+#include "piece.hpp"
 #include "platform.hpp"
 #include "socket.hpp"
 #include "tracker_connection.hpp"
@@ -117,9 +118,13 @@ Download::Download(const std::string &path_to_torrent)
 	    std::filesystem::file_size(output_file) != static_cast<uintmax_t>(m_file_length))
 	{
 		utils::preallocate_file(output_file, m_file_length);
+		m_bitfield = message::Bitfield(m_pieces.length() / 20);
 	} else
 	{
 		std::ifstream output_file_stream(output_file, std::ios::in | std::ios::binary);
-		message::Bitfield bf(output_file_stream, m_piece_length, m_pieces);
+		m_bitfield = message::Bitfield(output_file_stream, m_piece_length, m_pieces);
 	}
+
+	Piece piece(m_piece_length);
+
 }

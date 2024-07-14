@@ -1,17 +1,14 @@
 #pragma once
 
-#include <arpa/inet.h>
-#include <fstream>
-#include <netinet/in.h>
-
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <vector>
 
 namespace message
 {
 
-// Inheritance just for the sake of avoiding code duplication and boilerplate
+// Inheritance just for the sake of avoiding some code duplication
 
 struct Message {
 protected:
@@ -22,6 +19,13 @@ protected:
 
 public:
 	[[nodiscard]] const std::vector<uint8_t> &serialized() const;
+};
+
+struct Handshake final : public Message {
+	Handshake(std::vector<uint8_t> &&buffer);
+	Handshake(const std::string &info_hash, const std::string &peer_id);
+	[[nodiscard]] std::string get_info_hash() const;
+	[[nodiscard]] std::string get_peer_id() const;
 };
 
 struct KeepAlive final : public Message {
@@ -58,20 +62,16 @@ struct Have final : public Message {
 };
 
 struct Bitfield final : public Message {
-private:
-	void set_index(size_t index, bool value) noexcept;
-
-public:
 	Bitfield() = default;
 	Bitfield(std::vector<uint8_t> &&buffer);
 	// length here is an amount of pieces, not the length of a file or any other length
 	Bitfield(size_t length);
 	Bitfield(std::ifstream &file, long long piece_length, std::string_view hashes);
 
-	// Bitfield logic
+	void set_index(size_t index, bool value) noexcept;
 };
 
-struct Request final : public Message {
+struct Request : public Message {
 	Request(std::vector<uint8_t> &&buffer);
 	Request(uint32_t index, uint32_t begin, uint32_t length);
 
@@ -85,11 +85,25 @@ struct Request final : public Message {
 
 struct Piece final : public Message {
 	Piece(std::vector<uint8_t> &&buffer);
-	// TODO read from file ctor
 };
 
-struct Cancel final : public Message {};
+// Cancel message is identical to Request with id changed from 6 to 8
+// some sort of inheritance or typedef would look ugly
+// so I chose code duplication instead
+struct Cancel : public Message {
+	Cancel(std::vector<uint8_t> &&buffer);
+	Cancel(uint32_t index, uint32_t begin, uint32_t length);
 
-struct Port final : public Message {};
+	[[nodiscard]] uint32_t get_index() const;
+	void set_index(uint32_t index);
+	[[nodiscard]] uint32_t get_begin() const;
+	void set_begin(uint32_t begin);
+	[[nodiscard]] uint32_t get_length() const;
+	void set_length(uint32_t length);
+};
+
+struct Port final : public Message {
+	Port(std::vector<uint8_t> &&buffer);
+};
 
 } // namespace message
