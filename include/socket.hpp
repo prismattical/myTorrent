@@ -35,10 +35,10 @@ public:
 	Socket &operator=(Socket &&other) noexcept;
 
 	void send_all(const std::vector<unsigned char> &data) const;
-	std::vector<unsigned char> recv_until_close() const;
-	std::vector<unsigned char> recv_some(size_t len) const;
-	uint32_t recv_length() const;
-	std::tuple<std::string, std::string> get_peer_ip_and_port() const;
+	[[nodiscard]] std::vector<unsigned char> recv_until_close() const;
+	[[nodiscard]] std::vector<unsigned char> recv_some(size_t len) const;
+	[[nodiscard]] uint32_t recv_length() const;
+	[[nodiscard]] std::tuple<std::string, std::string> get_peer_ip_and_port() const;
 
 	static std::string ntop(uint32_t ip);
 
