@@ -1,64 +1,107 @@
 #pragma once
 
+#include "socket.hpp"
+
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <netinet/in.h>
+#include <string>
+#include <variant>
 #include <vector>
 
 namespace message
 {
 
-// Inheritance just for the sake of avoiding some code duplication
-
-struct Message {
-protected:
-	std::vector<uint8_t> m_data;
-
-	Message(std::vector<uint8_t> &&buffer);
-	Message() = default;
+struct Handshake final {
+private:
+	uint8_t m_pstrlen = 19;
+	std::string m_pstr = "BitTorrent protocol";
+	std::vector<uint8_t> m_reserved = std::vector<uint8_t>(8, 0);
+	std::string m_info_hash;
+	std::string m_peer_id;
 
 public:
-	[[nodiscard]] const std::vector<uint8_t> &serialized() const;
-};
-
-struct Handshake final : public Message {
-	Handshake(std::vector<uint8_t> &&buffer);
+	Handshake() = default;
+	Handshake(const Socket &socket);
 	Handshake(const std::string &info_hash, const std::string &peer_id);
-	[[nodiscard]] std::string get_info_hash() const;
-	[[nodiscard]] std::string get_peer_id() const;
+
+	[[nodiscard]] std::vector<uint8_t> serialized() const;
+
+	[[nodiscard]] uint8_t pstrlen() const;
+
+	void pstr(const std::string &pstr);
+	[[nodiscard]] std::string pstr() const;
+
+	void info_hash(const std::string &info_hash);
+	[[nodiscard]] std::string info_hash() const;
+
+	void peer_id(const std::string &peer_id);
+	[[nodiscard]] std::string peer_id() const;
 };
 
-struct KeepAlive final : public Message {
-	KeepAlive(std::vector<uint8_t> &&buffer);
-	KeepAlive();
+struct KeepAlive final {
+private:
+	uint32_t m_length = 0;
+
+public:
+	KeepAlive() = default;
+	[[nodiscard]] std::vector<uint8_t> serialized() const;
 };
 
-struct Choke final : public Message {
-	Choke(std::vector<uint8_t> &&buffer);
-	Choke();
+struct Choke final {
+private:
+	uint32_t m_length = 1;
+	uint8_t m_id = 0x00;
+
+public:
+	Choke() = default;
+	[[nodiscard]] std::vector<uint8_t> serialized() const;
 };
 
-struct Unchoke final : public Message {
-	Unchoke(std::vector<uint8_t> &&buffer);
-	Unchoke();
+struct Unchoke final {
+private:
+	uint32_t m_length = 1;
+	uint8_t m_id = 0x01;
+
+public:
+	Unchoke() = default;
+	[[nodiscard]] std::vector<uint8_t> serialized() const;
 };
 
-struct Interested final : public Message {
-	Interested(std::vector<uint8_t> &&buffer);
-	Interested();
+struct Interested final {
+private:
+	uint32_t m_length = 1;
+	uint8_t m_id = 0x02;
+
+public:
+	Interested() = default;
+	[[nodiscard]] std::vector<uint8_t> serialized() const;
 };
 
-struct NotInterested final : public Message {
-	NotInterested(std::vector<uint8_t> &&buffer);
-	NotInterested();
+struct NotInterested final {
+private:
+	uint32_t m_length = 1;
+	uint8_t m_id = 0x03;
+
+public:
+	NotInterested() = default;
+	[[nodiscard]] std::vector<uint8_t> serialized() const;
 };
 
-struct Have final : public Message {
-	Have(std::vector<uint8_t> &&buffer);
+struct Have final {
+private:
+	uint32_t m_length = 5;
+	uint8_t m_id = 0x03;
+	uint32_t m_index;
+
+public:
 	Have(uint32_t index);
 
-	[[nodiscard]] uint32_t get_index() const;
-	void set_index(uint32_t index);
+	void index(uint32_t index);
+	[[nodiscard]] uint32_t index() const;
+
+	[[nodiscard]] std::vector<uint8_t> serialized() const;
 };
 
 struct Bitfield final : public Message {
@@ -105,5 +148,10 @@ struct Cancel : public Message {
 struct Port final : public Message {
 	Port(std::vector<uint8_t> &&buffer);
 };
+
+using Message = std::variant<KeepAlive, Choke, Unchoke, Interested, NotInterested, Have, Bitfield,
+			     Request, Piece, Cancel, Port>;
+
+Message read_message(const Socket &socket);
 
 } // namespace message

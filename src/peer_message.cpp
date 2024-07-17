@@ -18,135 +18,132 @@
 namespace message
 {
 
-// Message
-
-const std::vector<uint8_t> &Message::serialized() const
-{
-	return m_data;
-}
-
-Message::Message(std::vector<uint8_t> &&buffer)
-	: m_data(std::move(buffer))
-{
-}
-
 // Handshake
 
-Handshake::Handshake(std::vector<uint8_t> &&buffer)
-	: Message(std::move(buffer))
-{
-}
-
-Handshake::Handshake(const std::string &info_hash, const std::string &peer_id)
-	: Message([&info_hash, &peer_id]() mutable {
-		std::vector<uint8_t> ret(1 + 19 + 8 + 20 + 20);
-		const std::string_view str = "BitTorrent protocol";
-
-		ret[0] = 19;
-		std::copy(str.begin(), str.end(), ret.begin() + 1);
-		memset(ret.data() + 1 + 19, 0, 8);
-
-		assert(info_hash.size() == 20 && "info hash is not 20 characters");
-		assert(peer_id.size() == 20 && "peer id is not 20 characters");
-
-		std::copy(info_hash.begin(), info_hash.end(), ret.data() + 1 + 19 + 8);
-		std::copy(peer_id.begin(), peer_id.end(), ret.data() + 1 + 19 + 8 + 20);
+Handshake::Handshake(const Socket &socket)
+	: m_pstrlen([this, &socket]() {
+		auto recv = socket.recv_some(0)[0];
+		assert(recv == 19 && "invalid handshake received");
+		return recv;
+	}())
+	, m_pstr([this, &socket]() {
+		auto recv = socket.recv_some(m_pstrlen);
+		std::string ret(recv.begin(), recv.end());
+		assert(ret == "BitTorrent protocol" && "invalid handshake received");
+		return ret;
+	}())
+	, m_reserved(socket.recv_some(8))
+	, m_info_hash([&socket]() {
+		auto recv = socket.recv_some(20);
+		std::string ret(recv.begin(), recv.end());
+		return ret;
+	}())
+	, m_peer_id([&socket]() {
+		auto recv = socket.recv_some(20);
+		std::string ret(recv.begin(), recv.end());
 		return ret;
 	}())
 {
 }
-
-std::string Handshake::get_info_hash() const
+Handshake::Handshake(const std::string &info_hash, const std::string &peer_id)
+	: m_info_hash{ info_hash }
+	, m_peer_id{ peer_id }
 {
-	return { m_data.begin() + 1 + 19 + 8, m_data.begin() + 1 + 19 + 8 + 20 };
 }
-std::string Handshake::get_peer_id() const
+
+std::vector<uint8_t> Handshake::serialized() const
 {
-	return { m_data.begin() + 1 + 19 + 8 + 20, m_data.end() };
+	std::vector<uint8_t> ret(49 + m_pstrlen, 0);
+	ret[0] = m_pstrlen;
+	std::copy(m_pstr.begin(), m_pstr.end(), ret.begin() + 1);
+	std::copy(m_reserved.begin(), m_reserved.end(), ret.begin() + 1 + m_pstrlen);
+	std::copy(m_info_hash.begin(), m_info_hash.end(), ret.begin() + 1 + m_pstrlen + 8);
+	std::copy(m_peer_id.begin(), m_peer_id.end(), ret.begin() + 1 + m_pstrlen + 8 + 20);
+	return ret;
+}
+
+uint8_t Handshake::pstrlen() const
+{
+	return m_pstrlen;
+}
+
+void Handshake::pstr(const std::string &pstr)
+{
+	m_pstrlen = pstr.size();
+	m_pstr = pstr;
+}
+std::string Handshake::pstr() const
+{
+	return m_pstr;
+}
+
+void Handshake::info_hash(const std::string &info_hash)
+{
+	m_info_hash = info_hash;
+}
+std::string Handshake::info_hash() const
+{
+	return m_info_hash;
+}
+
+void Handshake::peer_id(const std::string &peer_id)
+{
+	m_peer_id = peer_id;
+}
+std::string Handshake::peer_id() const
+{
+	return m_peer_id;
 }
 
 // KeepAlive
 
-KeepAlive::KeepAlive()
-	: Message{ { 0x00, 0x00, 0x00, 0x00 } }
+std::vector<uint8_t> KeepAlive::serialized() const
 {
-}
-KeepAlive::KeepAlive(std::vector<uint8_t> &&buffer)
-	: Message{ std::move(buffer) }
-{
+	return { 0x00, 0x00, 0x00, 0x00 };
 }
 
 // Choke
 
-Choke::Choke(std::vector<uint8_t> &&buffer)
-	: Message{ std::move(buffer) }
+std::vector<uint8_t> Choke::serialized() const
 {
-}
-Choke::Choke()
-	: Message{ { 0x00, 0x00, 0x00, 0x01, 0x00 } }
-{
+	return { 0x00, 0x00, 0x00, 0x01, 0x00 };
 }
 
 // Unchoke
 
-Unchoke::Unchoke(std::vector<uint8_t> &&buffer)
-	: Message{ std::move(buffer) }
+std::vector<uint8_t> Unchoke::serialized() const
 {
-}
-Unchoke::Unchoke()
-	: Message{ { 0x00, 0x00, 0x00, 0x01, 0x01 } }
-{
+	return { 0x00, 0x00, 0x00, 0x01, 0x01 };
 }
 
 // Interested
 
-Interested::Interested(std::vector<uint8_t> &&buffer)
-	: Message{ std::move(buffer) }
+std::vector<uint8_t> Interested::serialized() const
 {
-}
-Interested::Interested()
-	: Message{ { 0x00, 0x00, 0x00, 0x01, 0x02 } }
-{
+	return { 0x00, 0x00, 0x00, 0x01, 0x02 };
 }
 
 // NotInterested
 
-NotInterested::NotInterested(std::vector<uint8_t> &&buffer)
-	: Message{ std::move(buffer) }
+std::vector<uint8_t> NotInterested::serialized() const
 {
-}
-NotInterested::NotInterested()
-	: Message{ { 0x00, 0x00, 0x00, 0x01, 0x03 } }
-{
+	return { 0x00, 0x00, 0x00, 0x01, 0x03 };
 }
 
 // Have
 
-Have::Have(std::vector<uint8_t> &&buffer)
-	: Message{ std::move(buffer) }
-{
-}
-
 Have::Have(uint32_t index)
-	: Message{ [index]() mutable {
-		std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x05, 0x04, 0x00, 0x00, 0x00, 0x00 };
-		const uint32_t ind = htonl(index);
-		memcpy(ret.data() + 4 + 1, &ind, sizeof ind);
-		return ret;
-	}() }
+	: m_index{ index }
 {
 }
 
-[[nodiscard]] uint32_t Have::get_index() const
+void Have::index(uint32_t index)
 {
-	uint32_t index;
-	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
-	return ntohl(index);
+	m_index = index;
 }
-void Have::set_index(uint32_t index)
+uint32_t Have::index() const
 {
-	index = htonl(index);
-	memcpy(m_data.data() + 4 + 1, &index, sizeof index);
+	return m_index;
 }
 
 // Bitfield
@@ -332,6 +329,16 @@ void Cancel::set_length(uint32_t length)
 Port::Port(std::vector<uint8_t> &&buffer)
 	: Message(std::move(buffer))
 {
+}
+
+Message read_message(const Socket &socket)
+{
+	uint32_t len = ntohl(socket.recv_length());
+	if (len == 0)
+	{
+		return KeepAlive();
+	}
+	// TODO rest of the code
 }
 
 } // namespace message
