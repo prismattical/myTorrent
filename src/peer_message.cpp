@@ -3,6 +3,7 @@
 #include "utils.hpp"
 
 #include <arpa/inet.h>
+#include <cstddef>
 #include <netinet/in.h>
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -20,27 +22,41 @@ namespace message
 
 // Handshake
 
-Handshake::Handshake(const Socket &socket)
-	: m_pstrlen([this, &socket]() {
-		auto recv = socket.recv_some(0)[0];
-		assert(recv == 19 && "invalid handshake received");
+Handshake::Handshake(const Socket &socket, const std::string &info_hash, const std::string &peer_id)
+	: m_pstrlen([&socket]() {
+		auto recv = socket.recv_some(1)[0];
+		if (recv != 19)
+		{
+			throw std::runtime_error("Invalid handshake received");
+		}
 		return recv;
 	}())
 	, m_pstr([this, &socket]() {
 		auto recv = socket.recv_some(m_pstrlen);
 		std::string ret(recv.begin(), recv.end());
-		assert(ret == "BitTorrent protocol" && "invalid handshake received");
+		if (ret != "BitTorrent protocol")
+		{
+			throw std::runtime_error("Invalid handshake received");
+		}
 		return ret;
 	}())
 	, m_reserved(socket.recv_some(8))
-	, m_info_hash([&socket]() {
+	, m_info_hash([&socket, &info_hash]() {
 		auto recv = socket.recv_some(20);
 		std::string ret(recv.begin(), recv.end());
+		if (ret != info_hash)
+		{
+			throw std::runtime_error("Invalid handshake received");
+		}
 		return ret;
 	}())
-	, m_peer_id([&socket]() {
+	, m_peer_id([&socket, &peer_id]() {
 		auto recv = socket.recv_some(20);
 		std::string ret(recv.begin(), recv.end());
+		if (peer_id != "" && ret != peer_id)
+		{
+			throw std::runtime_error("Invalid handshake received");
+		}
 		return ret;
 	}())
 {
@@ -146,25 +162,23 @@ uint32_t Have::index() const
 	return m_index;
 }
 
+std::vector<uint8_t> Have::serialized() const
+{
+	std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x05, 0x04, 0x00, 0x00, 0x00, 0x00 };
+	const uint32_t index = htonl(m_index);
+	memcpy(ret.data() + 4 + 1, &index, sizeof index);
+	return ret;
+}
+
 // Bitfield
 
 Bitfield::Bitfield(std::vector<uint8_t> &&buffer)
-	: Message{ std::move(buffer) }
+	: m_bitfield{ std::move(buffer) }
 {
 }
 
 Bitfield::Bitfield(const size_t length)
-	: Message([length]() mutable {
-		// (A - 1) / B + 1 - ceiling rounding for integer division
-		const size_t bf_len = (length - 1) / 8 + 1;
-		std::vector<uint8_t> ret(4 + 1 + bf_len, 0);
-		const uint32_t len = htonl(bf_len + 1);
-
-		memcpy(ret.data(), &len, sizeof len);
-		ret[4] = 0x05;
-
-		return ret;
-	}())
+	: m_bitfield((length - 1) / 8 + 1, 0)
 {
 }
 
@@ -188,157 +202,264 @@ void Bitfield::set_index(size_t index, bool value) noexcept
 {
 	if (value)
 	{
-		m_data[4 + 1 + index / 8] |= static_cast<uint8_t>(1) << (7 - index % 8);
+		m_bitfield[index / 8] |= static_cast<uint8_t>(1) << (7 - index % 8);
 	} else
 	{
-		m_data[4 + 1 + index / 8] &= ~(static_cast<uint8_t>(1) << (7 - index % 8));
+		m_bitfield[index / 8] &= ~(static_cast<uint8_t>(1) << (7 - index % 8));
 	}
+}
+
+std::tuple<std::vector<uint8_t>, const std::vector<uint8_t> &> Bitfield::serialized() const
+{
+	std::vector<uint8_t> prefix(5, 0);
+	prefix[4] = 0x05;
+	const uint32_t len = htonl(1 + m_bitfield.size());
+	memcpy(prefix.data(), &len, sizeof len);
+	return { prefix, m_bitfield };
 }
 
 // Request
 
-Request::Request(std::vector<uint8_t> &&buffer)
-	: Message{ std::move(buffer) }
-{
-}
-
 Request::Request(uint32_t index, uint32_t begin, uint32_t length)
-	: Message{ [index, begin, length]() mutable {
-		std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x0D, 0x06, 0x00, 0x00, 0x00, 0x00,
-					  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-
-		index = htonl(index);
-		begin = htonl(begin);
-		length = htonl(length);
-
-		memcpy(ret.data() + 4 + 1, &index, sizeof index);
-		memcpy(ret.data() + 4 + 1 + 4, &begin, sizeof begin);
-		memcpy(ret.data() + 4 + 1 + 4 + 4, &length, sizeof length);
-
-		return ret;
-	}() }
+	: m_index{ index }
+	, m_begin{ begin }
+	, m_length{ length }
 {
 }
-
-[[nodiscard]] uint32_t Request::get_index() const
+uint32_t Request::get_index() const
 {
-	uint32_t index;
-	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
-	return ntohl(index);
+	return m_index;
 }
 void Request::set_index(uint32_t index)
 {
-	index = htonl(index);
-	memcpy(m_data.data() + 4 + 1, &index, sizeof index);
+	m_index = index;
 }
-
-[[nodiscard]] uint32_t Request::get_begin() const
+uint32_t Request::get_begin() const
 {
-	uint32_t begin;
-	memcpy(&begin, m_data.data() + 4 + 1 + 4, sizeof begin);
-	return ntohl(begin);
+	return m_begin;
 }
 void Request::set_begin(uint32_t begin)
 {
-	begin = htonl(begin);
-	memcpy(m_data.data() + 4 + 1 + 4, &begin, sizeof begin);
+	m_begin = begin;
 }
-
-[[nodiscard]] uint32_t Request::get_length() const
+uint32_t Request::get_length() const
 {
-	uint32_t length;
-	memcpy(&length, m_data.data() + 4 + 1 + 4 + 4, sizeof length);
-	return ntohl(length);
+	return m_length;
 }
 void Request::set_length(uint32_t length)
 {
-	length = htonl(length);
-	memcpy(m_data.data() + 4 + 1 + 4 + 4, &length, sizeof length);
+	m_length = length;
+}
+
+std::vector<uint8_t> Request::serialized() const
+{
+	std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x0D, 0x06, 0x00, 0x00, 0x00, 0x00,
+				  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+	const uint32_t index = htonl(m_index);
+	const uint32_t begin = htonl(m_begin);
+	const uint32_t length = htonl(m_length);
+
+	memcpy(ret.data() + 4 + 1, &index, sizeof index);
+	memcpy(ret.data() + 4 + 1 + 4, &begin, sizeof begin);
+	memcpy(ret.data() + 4 + 1 + 4 + 4, &length, sizeof length);
+
+	return ret;
 }
 
 // Piece
 
-Piece::Piece(std::vector<uint8_t> &&buffer)
-	: Message{ std::move(buffer) }
+Piece::Piece(uint32_t index, uint32_t begin, std::vector<uint8_t> &&block)
+	: m_index(index)
+	, m_begin(begin)
+	, m_block(std::move(block))
 {
+}
+
+uint32_t Piece::get_index() const
+{
+	return m_index;
+}
+void Piece::set_index(uint32_t index)
+{
+	m_index = index;
+}
+uint32_t Piece::get_begin() const
+{
+	return m_begin;
+}
+void Piece::set_begin(uint32_t begin)
+{
+	m_begin = begin;
+}
+
+std::tuple<std::vector<uint8_t>, const std::vector<uint8_t> &> Piece::serialized() const
+{
+	std::vector<uint8_t> prefix(13, 0);
+	prefix[4] = 0x07;
+	const uint32_t length = htonl(9 + m_block.size());
+	const uint32_t index = htonl(m_index);
+	const uint32_t begin = htonl(m_begin);
+	memcpy(prefix.data(), &length, sizeof length);
+	memcpy(prefix.data(), &index, sizeof index);
+	memcpy(prefix.data(), &begin, sizeof begin);
+
+	return { prefix, m_block };
 }
 
 // Cancel
 
-Cancel::Cancel(std::vector<uint8_t> &&buffer)
-	: Message{ std::move(buffer) }
-{
-}
-
 Cancel::Cancel(uint32_t index, uint32_t begin, uint32_t length)
-	: Message{ [index, begin, length]() mutable {
-		std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x0D, 0x08, 0x00, 0x00, 0x00, 0x00,
-					  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-
-		index = htonl(index);
-		begin = htonl(begin);
-		length = htonl(length);
-
-		memcpy(ret.data() + 4 + 1, &index, sizeof index);
-		memcpy(ret.data() + 4 + 1 + 4, &begin, sizeof begin);
-		memcpy(ret.data() + 4 + 1 + 4 + 4, &length, sizeof length);
-
-		return ret;
-	}() }
+	: m_index{ index }
+	, m_begin{ begin }
+	, m_length{ length }
 {
 }
-
-[[nodiscard]] uint32_t Cancel::get_index() const
+uint32_t Cancel::get_index() const
 {
-	uint32_t index;
-	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
-	return ntohl(index);
+	return m_index;
 }
 void Cancel::set_index(uint32_t index)
 {
-	index = htonl(index);
-	memcpy(m_data.data() + 4 + 1, &index, sizeof index);
+	m_index = index;
 }
-
-[[nodiscard]] uint32_t Cancel::get_begin() const
+uint32_t Cancel::get_begin() const
 {
-	uint32_t begin;
-	memcpy(&begin, m_data.data() + 4 + 1 + 4, sizeof begin);
-	return ntohl(begin);
+	return m_begin;
 }
 void Cancel::set_begin(uint32_t begin)
 {
-	begin = htonl(begin);
-	memcpy(m_data.data() + 4 + 1 + 4, &begin, sizeof begin);
+	m_begin = begin;
 }
-
-[[nodiscard]] uint32_t Cancel::get_length() const
+uint32_t Cancel::get_length() const
 {
-	uint32_t length;
-	memcpy(&length, m_data.data() + 4 + 1 + 4 + 4, sizeof length);
-	return ntohl(length);
+	return m_length;
 }
 void Cancel::set_length(uint32_t length)
 {
-	length = htonl(length);
-	memcpy(m_data.data() + 4 + 1 + 4 + 4, &length, sizeof length);
+	m_length = length;
+}
+
+std::vector<uint8_t> Cancel::serialized() const
+{
+	std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x0D, 0x08, 0x00, 0x00, 0x00, 0x00,
+				  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+	const uint32_t index = htonl(m_index);
+	const uint32_t begin = htonl(m_begin);
+	const uint32_t length = htonl(m_length);
+
+	memcpy(ret.data() + 4 + 1, &index, sizeof index);
+	memcpy(ret.data() + 4 + 1 + 4, &begin, sizeof begin);
+	memcpy(ret.data() + 4 + 1 + 4 + 4, &length, sizeof length);
+
+	return ret;
 }
 
 // Port
 
-Port::Port(std::vector<uint8_t> &&buffer)
-	: Message(std::move(buffer))
+Port::Port(uint16_t port)
+	: m_port(port)
 {
+}
+
+uint16_t Port::get_port() const
+{
+	return m_port;
+}
+void Port::set_port(uint16_t port)
+{
+	m_port = port;
+}
+
+std::vector<uint8_t> Port::serialized() const
+{
+	std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x03, 0x09, 0x00, 0x00 };
+	const uint16_t port = htons(m_port);
+	memcpy(ret.data() + 4 + 1, &port, sizeof port);
+	return ret;
 }
 
 Message read_message(const Socket &socket)
 {
-	uint32_t len = ntohl(socket.recv_length());
+	const uint32_t len = ntohl(socket.recv_length());
 	if (len == 0)
 	{
 		return KeepAlive();
+	} else
+	{
+		const uint8_t id = socket.recv_some(len)[0];
+		switch (id)
+		{
+		case 0x00:
+			return Choke();
+		case 0x01:
+			return Unchoke();
+		case 0x02:
+			return Interested();
+		case 0x03:
+			return NotInterested();
+		case 0x04: {
+			std::vector<uint8_t> buffer = socket.recv_some(len - 1);
+			uint32_t index;
+			memcpy(&index, buffer.data(), sizeof index);
+			index = ntohl(index);
+			return Have(index);
+		}
+		case 0x05: {
+			std::vector<uint8_t> buffer = socket.recv_some(len - 1);
+			return Bitfield(std::move(buffer));
+		}
+		case 0x06: {
+			std::vector<uint8_t> buffer = socket.recv_some(len - 1);
+			uint32_t index;
+			uint32_t begin;
+			uint32_t length;
+			memcpy(&index, buffer.data(), sizeof index);
+			memcpy(&begin, buffer.data() + 4, sizeof begin);
+			memcpy(&length, buffer.data() + 4 + 4, sizeof length);
+			index = ntohl(index);
+			begin = ntohl(begin);
+			length = ntohl(length);
+
+			return Request(index, begin, length);
+		}
+		case 0x07: {
+			std::vector<uint8_t> prefix = socket.recv_some(4 + 4);
+			uint32_t index;
+			uint32_t begin;
+			memcpy(&index, prefix.data(), sizeof index);
+			memcpy(&begin, prefix.data() + 4, sizeof begin);
+			index = ntohl(index);
+			begin = ntohl(begin);
+			std::vector<uint8_t> buffer = socket.recv_some(len - 1 - 4 - 4);
+
+			return Piece(index, begin, std::move(buffer));
+		}
+		case 0x08: {
+			std::vector<uint8_t> buffer = socket.recv_some(len - 1);
+			uint32_t index;
+			uint32_t begin;
+			uint32_t length;
+			memcpy(&index, buffer.data(), sizeof index);
+			memcpy(&begin, buffer.data() + 4, sizeof begin);
+			memcpy(&length, buffer.data() + 4 + 4, sizeof length);
+			index = ntohl(index);
+			begin = ntohl(begin);
+			length = ntohl(length);
+
+			return Cancel(index, begin, length);
+		}
+		case 0x09: {
+			std::vector<uint8_t> buffer = socket.recv_some(len - 1);
+			uint16_t port;
+			memcpy(&port, buffer.data(), sizeof port);
+			return Port(port);
+		}
+		default:
+			throw std::runtime_error("Unexpected id value");
+		}
 	}
-	// TODO rest of the code
 }
 
 } // namespace message

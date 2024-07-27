@@ -18,6 +18,8 @@ class Download {
 	long long m_file_length;
 	std::string m_connection_id;
 
+	std::vector<unsigned char> m_info_hash_binary;
+
 	std::vector<std::pair<std::string, std::string>> m_peers;
 
 	message::Bitfield m_bitfield;

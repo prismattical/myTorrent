@@ -2,6 +2,7 @@
 
 #include "bencode.hpp"
 #include "config.hpp"
+#include "peer_connection.hpp"
 #include "peer_message.hpp"
 #include "piece.hpp"
 #include "platform.hpp"
@@ -98,7 +99,8 @@ Download::Download(const std::string &path_to_torrent)
 	bencode::data_view m_torrent_data_view = bencode::decode_view(m_torrent_string);
 	bencode::data_view info_dict_data = m_torrent_data_view["info"];
 	const std::string info = bencode::encode(info_dict_data);
-	m_info_hash = utils::sha1_to_url(utils::string_to_sha1(info));
+	m_info_hash_binary = utils::string_to_sha1(info);
+	m_info_hash = utils::sha1_to_url(m_info_hash_binary);
 	m_piece_length = std::get<bencode::integer_view>(info_dict_data["piece length"]);
 	m_pieces = std::get<bencode::string_view>(info_dict_data["pieces"]);
 	m_announce_url =
@@ -125,6 +127,7 @@ Download::Download(const std::string &path_to_torrent)
 		m_bitfield = message::Bitfield(output_file_stream, m_piece_length, m_pieces);
 	}
 
-	Piece piece(m_piece_length);
-
+	PeerConnection pc(m_peers[0].first, m_peers[0].second,
+			  { m_info_hash_binary.begin(), m_info_hash_binary.end() },
+			  m_connection_id);
 }

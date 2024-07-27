@@ -6,3 +6,4 @@ build/
 .cache/
 myTorrent
 .clangd
+*.torrent
