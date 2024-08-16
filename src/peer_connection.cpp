@@ -42,8 +42,8 @@ void PeerConnection::proceed()
 		{
 			m_offset = 0;
 
-			if (strncmp(reinterpret_cast<char *>(m_buffer.data()),
-				    "BitTorrent protocol", 19) != 0)
+			if (memcmp(reinterpret_cast<char *>(m_buffer.data()), "BitTorrent protocol",
+				   19) != 0)
 			{
 				throw std::runtime_error(
 					"Handshake: invalid protocol name received");
@@ -70,8 +70,8 @@ void PeerConnection::proceed()
 		if (m_offset == 10)
 		{
 			m_offset = 0;
-			if (strncmp(reinterpret_cast<char *>(m_buffer.data()),
-				    m_info_hash_binary.data(), 10) != 0)
+			if (memcmp(reinterpret_cast<char *>(m_buffer.data()),
+				   m_info_hash_binary.data(), 10) != 0)
 			{
 				throw std::runtime_error("Handshake: invalid info hash received");
 			}
