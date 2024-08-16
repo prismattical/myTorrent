@@ -40,6 +40,7 @@ public:
 	[[nodiscard]] std::vector<unsigned char> recv_some(size_t len) const;
 	[[nodiscard]] uint32_t recv_length() const;
 	[[nodiscard]] std::tuple<std::string, std::string> get_peer_ip_and_port() const;
+	void recv_nonblock(size_t len, std::vector<uint8_t> &buffer, size_t &offset) const;
 
 	static std::string ntop(uint32_t ip);
 

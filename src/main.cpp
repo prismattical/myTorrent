@@ -7,7 +7,7 @@ int main()
 	config::create_cache_dir();
 	config::create_downloads_dir();
 
-	Download test_dl("debian.torrent");
+	Download test_dl("torrents/debian.torrent");
 
 	return 0;
 }

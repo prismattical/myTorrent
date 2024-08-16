@@ -11,6 +11,7 @@
 #include "utils.hpp"
 
 #include <arpa/inet.h>
+#include <exception>
 #include <netinet/in.h>
 
 #include <cstdint>
@@ -130,4 +131,14 @@ Download::Download(const std::string &path_to_torrent)
 	PeerConnection pc(m_peers[0].first, m_peers[0].second,
 			  { m_info_hash_binary.begin(), m_info_hash_binary.end() },
 			  m_connection_id);
+	try
+	{
+		while (true)
+		{
+			pc.proceed();
+		}
+	} catch (const std::runtime_error &e)
+	{
+		std::cout << e.what() << '\n';
+	}
 }

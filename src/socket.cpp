@@ -246,6 +246,35 @@ uint32_t Socket::recv_length() const
 	return ret;
 }
 
+void Socket::recv_nonblock(size_t len, std::vector<uint8_t> &buffer, size_t &offset) const
+{
+	ssize_t bytes_received = 0;
+	size_t bytes_received_total = offset;
+	if (offset == 0)
+	{
+		buffer.resize(len);
+	}
+
+	while (len > 0 &&
+	       (bytes_received = recv(m_socket, buffer.data() + bytes_received_total, len, 0)) > 0)
+	{
+		len -= bytes_received;
+		bytes_received_total += bytes_received;
+	}
+
+	offset = bytes_received_total;
+
+	if (bytes_received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+	{
+		return;
+	}
+
+	if (len != 0 || bytes_received < 0)
+	{
+		throw std::runtime_error("recv_some(): " + std::string(strerror(errno)));
+	}
+}
+
 Socket::~Socket()
 {
 	close(m_socket);
