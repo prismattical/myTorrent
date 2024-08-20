@@ -23,8 +23,6 @@ private:
 	std::string m_peer_id;
 
 public:
-	Handshake(const Socket &socket, const std::string &info_hash,
-		  const std::string &peer_id = "");
 	Handshake(const std::string &info_hash, const std::string &peer_id);
 
 	[[nodiscard]] std::vector<uint8_t> serialized() const;
@@ -127,6 +125,7 @@ private:
 
 public:
 	Request(uint32_t index, uint32_t begin, uint32_t length);
+	Request() = default;
 
 	[[nodiscard]] uint32_t get_index() const;
 	void set_index(uint32_t index);

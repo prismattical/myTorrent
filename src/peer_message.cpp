@@ -22,45 +22,6 @@ namespace message
 
 // Handshake
 
-Handshake::Handshake(const Socket &socket, const std::string &info_hash, const std::string &peer_id)
-	: m_pstrlen([&socket]() {
-		auto recv = socket.recv_some(1)[0];
-		if (recv != 19)
-		{
-			throw std::runtime_error("Invalid handshake received");
-		}
-		return recv;
-	}())
-	, m_pstr([this, &socket]() {
-		auto recv = socket.recv_some(m_pstrlen);
-		std::string ret(recv.begin(), recv.end());
-		if (ret != "BitTorrent protocol")
-		{
-			throw std::runtime_error("Invalid handshake received");
-		}
-		return ret;
-	}())
-	, m_reserved(socket.recv_some(8))
-	, m_info_hash([&socket, &info_hash]() {
-		auto recv = socket.recv_some(20);
-		std::string ret(recv.begin(), recv.end());
-		if (ret != info_hash)
-		{
-			throw std::runtime_error("Invalid handshake received");
-		}
-		return ret;
-	}())
-	, m_peer_id([&socket, &peer_id]() {
-		auto recv = socket.recv_some(20);
-		std::string ret(recv.begin(), recv.end());
-		if (peer_id != "" && ret != peer_id)
-		{
-			throw std::runtime_error("Invalid handshake received");
-		}
-		return ret;
-	}())
-{
-}
 Handshake::Handshake(const std::string &info_hash, const std::string &peer_id)
 	: m_info_hash{ info_hash }
 	, m_peer_id{ peer_id }
