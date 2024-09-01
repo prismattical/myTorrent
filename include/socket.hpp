@@ -1,16 +1,17 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
 
-// RAII wrapper for Linux sockets
+// RAII wrapper for non blocking Linux sockets
 class Socket {
 public:
 	enum Protocol {
 		TCP,
-		UDP,
+		UDP, // not implemented
 		MAX_PROTOCOLS,
 	};
 	enum IPVersion {
@@ -20,14 +21,21 @@ public:
 		MAX_IP_VERSIONS,
 	};
 
+	class ConnectionResetException : public std::runtime_error {
+	public:
+		ConnectionResetException(const std::string &prefix = "");
+	};
+
 private:
-	int m_socket;
+	int m_socket = -1;
+
+	mutable bool m_connected = false;
 
 public:
 	Socket(const std::string &hostname, const std::string &port, Protocol protocol,
 	       IPVersion ip_version);
 
-	Socket();
+	Socket() = default;
 
 	Socket(const Socket &other) = delete;
 	Socket &operator=(const Socket &other) = delete;
@@ -35,12 +43,15 @@ public:
 	Socket(Socket &&other) noexcept;
 	Socket &operator=(Socket &&other) noexcept;
 
-	void send_all(const std::vector<unsigned char> &data) const;
-	[[nodiscard]] std::vector<unsigned char> recv_until_close() const;
-	[[nodiscard]] std::vector<unsigned char> recv_some(size_t len) const;
-	[[nodiscard]] uint32_t recv_length() const;
+	void validate_connect() const;
+
+	void send(const std::vector<uint8_t> &buffer, size_t &offset) const;
+	void recv(std::vector<uint8_t> &buffer, size_t &offset) const;
+
+	[[nodiscard]] bool connected() const;
+	[[nodiscard]] int get_fd() const;
+
 	[[nodiscard]] std::tuple<std::string, std::string> get_peer_ip_and_port() const;
-	void recv_nonblock(size_t len, std::vector<uint8_t> &buffer, size_t &offset) const;
 
 	static std::string ntop(uint32_t ip);
 

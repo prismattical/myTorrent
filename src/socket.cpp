@@ -1,13 +1,14 @@
 #include "socket.hpp"
 
 #include <arpa/inet.h>
+#include <cstddef>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <array>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -18,6 +19,13 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+
+// error message behavior is similar to C perror() function
+Socket::ConnectionResetException::ConnectionResetException(const std::string &prefix)
+	: std::runtime_error(prefix != "" ? prefix + ": " + "connection reset by peer" :
+					    "connection reset by peer")
+{
+}
 
 std::string ntop(const sockaddr *sa)
 {
@@ -87,11 +95,6 @@ int ip_version_to_int(const Socket::IPVersion ip_version) noexcept
 	}
 }
 
-Socket::Socket()
-	: m_socket{ -1 }
-{
-}
-
 Socket::Socket(const std::string &hostname, const std::string &port, const Protocol protocol,
 	       const IPVersion ip_version)
 {
@@ -113,20 +116,34 @@ Socket::Socket(const std::string &hostname, const std::string &port, const Proto
 	const std::unique_ptr<struct addrinfo, decltype(&freeaddrinfo)> res(res_temp, freeaddrinfo);
 
 	struct addrinfo *curr;
+	std::string stored_message;
 	for (curr = res.get(); curr != nullptr; curr = curr->ai_next)
 	{
 		m_socket = socket(curr->ai_family, curr->ai_socktype, curr->ai_protocol);
 
 		if (m_socket == -1)
 		{
-			std::cerr << "socket(): " << strerror(errno) << '\n';
+			stored_message = std::string("socket(): ") + strerror(errno);
+			continue;
+		}
+
+		rc = fcntl(m_socket, F_SETFL, O_NONBLOCK);
+		if (rc == -1)
+		{
+			stored_message = std::string("fcntl(): ") + strerror(errno);
+			close(m_socket);
 			continue;
 		}
 
 		rc = connect(m_socket, curr->ai_addr, curr->ai_addrlen);
-		if (rc == -1)
+		if (rc == 0)
 		{
-			std::cerr << "connect(): " << strerror(errno) << '\n';
+			m_connected = true;
+			break;
+		}
+		if (rc == -1 && errno != EINPROGRESS)
+		{
+			stored_message = std::string("connect(): ") + strerror(errno);
 			close(m_socket);
 			continue;
 		}
@@ -136,7 +153,7 @@ Socket::Socket(const std::string &hostname, const std::string &port, const Proto
 
 	if (curr == nullptr)
 	{
-		throw std::runtime_error("Socket(): failed to connect");
+		throw std::runtime_error(std::string("Socket(): ") + stored_message);
 	}
 
 	const std::string str = ::ntop(curr->ai_addr);
@@ -148,6 +165,7 @@ Socket::Socket(Socket &&other) noexcept
 {
 	this->~Socket();
 	m_socket = std::exchange(other.m_socket, -1);
+	m_connected = other.m_connected;
 }
 
 Socket &Socket::operator=(Socket &&other) noexcept
@@ -156,21 +174,41 @@ Socket &Socket::operator=(Socket &&other) noexcept
 	{
 		this->~Socket();
 		m_socket = std::exchange(other.m_socket, -1);
+		m_connected = other.m_connected;
 	}
 
 	return *this;
 }
 
-void Socket::send_all(const std::vector<unsigned char> &data) const
+void Socket::validate_connect() const
 {
-	const unsigned char *buf = data.data();
-	size_t total = 0;
-	size_t bytesleft = data.size();
+	int rc;
+	int error = 0;
+	socklen_t err_len = sizeof error;
+	rc = getsockopt(m_socket, SOL_SOCKET, SO_ERROR, &error, &err_len);
+	if (rc == -1)
+	{
+		throw std::runtime_error(std::string("validate_connect(): getsockopt(): ") +
+					 strerror(errno));
+	}
+	if (error != 0)
+	{
+		// TODO: test if error actually represent valid errno
+		throw std::runtime_error(std::string("validate_connect(): connect(): ") +
+					 strerror(error));
+	}
+	m_connected = true;
+}
+
+void Socket::send(const std::vector<uint8_t> &buffer, size_t &offset) const
+{
+	size_t total = offset;
+	size_t bytesleft = buffer.size() - total;
 	ssize_t n = 0;
 
-	while (total < data.size())
+	while (total < buffer.size())
 	{
-		n = ::send(m_socket, buf + total, bytesleft, 0);
+		n = ::send(m_socket, buffer.data() + total, bytesleft, 0);
 		if (n == -1)
 		{
 			break;
@@ -179,84 +217,35 @@ void Socket::send_all(const std::vector<unsigned char> &data) const
 		bytesleft -= n;
 	}
 
+	offset = total;
+
+	if (n == -1 && (errno == EWOULDBLOCK || errno == EAGAIN))
+	{
+		return;
+	}
+
+	if (n == -1 && errno == ECONNRESET)
+	{
+		shutdown(m_socket, SHUT_WR);
+		throw ConnectionResetException("send()");
+	}
+
 	if (n == -1)
 	{
-		throw std::runtime_error("send_all(): " + std::string(strerror(errno)));
+		throw std::runtime_error("send(): " + std::string(strerror(errno)));
 	}
+
+	offset = 0;
 }
 
-std::vector<unsigned char> Socket::recv_until_close() const
+void Socket::recv(std::vector<uint8_t> &buffer, size_t &offset) const
 {
-	std::vector<unsigned char> data;
-
-	static constexpr size_t buffer_size = 4096;
-
-	static std::array<unsigned char, buffer_size> buffer;
-
-	ssize_t bytes_received;
-	while ((bytes_received = ::recv(m_socket, buffer.data(), buffer.size(), 0)) > 0)
-	{
-		data.insert(data.end(), buffer.begin(), buffer.begin() + bytes_received);
-		std::cout << "Received " << bytes_received << " bytes during recv()" << '\n';
-	}
-
-	if (bytes_received == -1)
-	{
-		throw std::runtime_error("recv_until_close(): " + std::string(strerror(errno)));
-	}
-
-	return data;
-}
-
-std::vector<unsigned char> Socket::recv_some(size_t len) const
-{
-	std::vector<unsigned char> ret(len);
-	ssize_t bytes_received = 0;
-	size_t bytes_received_total = 0;
-	while (len > 0 &&
-	       (bytes_received = recv(m_socket, ret.data() + bytes_received_total, len, 0)) > 0)
-	{
-		len -= bytes_received;
-		bytes_received_total += bytes_received;
-	}
-	if (len != 0 || bytes_received < 0)
-	{
-		throw std::runtime_error("recv_some(): " + std::string(strerror(errno)));
-	}
-	return ret;
-}
-
-uint32_t Socket::recv_length() const
-{
-	uint32_t ret;
-	size_t len = sizeof ret;
-	ssize_t bytes_received = 0;
-	size_t bytes_received_total = 0;
-	while (len > 0 && (bytes_received = recv(
-				   m_socket, reinterpret_cast<char *>(&ret) + bytes_received_total,
-				   len, 0)) > 0)
-	{
-		len -= bytes_received;
-		bytes_received_total += bytes_received;
-	}
-	if (len != 0 || bytes_received < 0)
-	{
-		throw std::runtime_error("recv_some(): " + std::string(strerror(errno)));
-	}
-	return ret;
-}
-
-void Socket::recv_nonblock(size_t len, std::vector<uint8_t> &buffer, size_t &offset) const
-{
+	size_t len = buffer.size() - offset;
 	ssize_t bytes_received = 0;
 	size_t bytes_received_total = offset;
-	if (offset == 0)
-	{
-		buffer.resize(len);
-	}
 
-	while (len > 0 &&
-	       (bytes_received = recv(m_socket, buffer.data() + bytes_received_total, len, 0)) > 0)
+	while (len > 0 && (bytes_received = ::recv(m_socket, buffer.data() + bytes_received_total,
+						   len, 0)) > 0)
 	{
 		len -= bytes_received;
 		bytes_received_total += bytes_received;
@@ -269,10 +258,29 @@ void Socket::recv_nonblock(size_t len, std::vector<uint8_t> &buffer, size_t &off
 		return;
 	}
 
-	if (len != 0 || bytes_received < 0)
+	if (bytes_received < 0)
 	{
-		throw std::runtime_error("recv_some(): " + std::string(strerror(errno)));
+		throw std::runtime_error("recv(): " + std::string(strerror(errno)));
 	}
+
+	// connection closed
+	if (bytes_received == 0)
+	{
+		shutdown(m_socket, SHUT_RD);
+		throw ConnectionResetException("recv()");
+	}
+
+	offset = 0;
+}
+
+bool Socket::connected() const
+{
+	return m_connected;
+}
+
+int Socket::get_fd() const
+{
+	return m_socket;
 }
 
 Socket::~Socket()
@@ -285,7 +293,7 @@ std::tuple<std::string, std::string> Socket::get_peer_ip_and_port() const
 	sockaddr_storage sa;
 	socklen_t s = sizeof sa;
 	// this var is for readability only
-	sockaddr *reinterpreted_sa = reinterpret_cast<sockaddr *>(&sa);
+	auto *reinterpreted_sa = reinterpret_cast<sockaddr *>(&sa);
 
 	getpeername(m_socket, reinterpreted_sa, &s);
 	return { ::ntop(reinterpreted_sa), std::to_string(ntohs(::get_port(reinterpreted_sa))) };

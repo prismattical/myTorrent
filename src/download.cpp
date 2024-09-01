@@ -4,13 +4,14 @@
 #include "config.hpp"
 #include "peer_connection.hpp"
 #include "peer_message.hpp"
-#include "piece.hpp"
 #include "platform.hpp"
 #include "socket.hpp"
 #include "tracker_connection.hpp"
 #include "utils.hpp"
 
+#include <algorithm>
 #include <arpa/inet.h>
+#include <cstddef>
 #include <exception>
 #include <netinet/in.h>
 
@@ -20,19 +21,21 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <variant>
 #include <vector>
+
+/*
 
 void Download::fill_peer_list()
 {
 	const auto [protocol, endpoint, path] = utils::parse_url(m_announce_url);
 	const auto [domain_name, port] = utils::parse_endpoint(endpoint);
 	TrackerConnection tr_conn(domain_name, port, m_connection_id);
-	tr_conn.send_http_request(endpoint, path, m_info_hash, "8765");
+	tr_conn.send_http(endpoint, path, m_info_hash, "8765");
 	const std::string get_result = tr_conn.recv_http_request();
 	const auto [return_code, body] = utils::parse_http_response(get_result);
 	auto response_data = bencode::decode(body);
@@ -74,18 +77,7 @@ void Download::fill_peer_list()
 		std::cout << peer.first << ":" << peer.second << '\n';
 	}
 }
-
-void Download::copy_torrent_to_cache(const std::string &path_to_torrent)
-{
-	const std::filesystem::path torrent_name =
-		std::filesystem::path(path_to_torrent).filename();
-	const std::filesystem::path path_to_destination =
-		config::get_path_to_cache_dir().append(std::string(torrent_name));
-	if (!std::filesystem::exists(path_to_destination))
-	{
-		std::filesystem::copy(path_to_torrent, path_to_destination);
-	}
-}
+*/
 
 Download::Download(const std::string &path_to_torrent)
 	: m_torrent_string{ [&]() {
@@ -104,16 +96,51 @@ Download::Download(const std::string &path_to_torrent)
 	m_info_hash = utils::sha1_to_url(m_info_hash_binary);
 	m_piece_length = std::get<bencode::integer_view>(info_dict_data["piece length"]);
 	m_pieces = std::get<bencode::string_view>(info_dict_data["pieces"]);
-	m_announce_url =
-		std::string(std::get<bencode::string_view>(m_torrent_data_view["announce"]));
 	m_filename = std::string(std::get<bencode::string_view>(info_dict_data["name"]));
 	m_file_length = std::get<bencode::integer_view>(info_dict_data["length"]);
 	m_connection_id = utils::generate_random_connection_id();
 
-	this->fill_peer_list();
-	// only once the client successfully gets the list of peers, we can copy .torrent to cache
-	// otherwise an ill-formed .torrent file could be passed, that shouldn't be copied
-	copy_torrent_to_cache(path_to_torrent);
+	// documentation for announce-list extension
+	// http://bittorrent.org/beps/bep_0012.html
+	try
+	{
+		const auto list_of_tiers =
+			std::get<bencode::list_view>(m_torrent_data_view["announce-list"]);
+
+		auto rd = std::random_device{};
+		auto rng = std::default_random_engine{ rd() };
+
+		for (size_t i = 0; i < list_of_tiers.size(); ++i)
+		{
+			m_announce_urls.emplace_back();
+			const auto tier = std::get<bencode::list_view>(list_of_tiers[i]);
+			for (const auto &url : tier)
+			{
+				m_announce_urls[i].emplace_back(
+					std::get<bencode::string_view>(url));
+			}
+			// for whatever reason documentation says to shuffle each tier, so we shuffle
+			std::shuffle(m_announce_urls[i].begin(), m_announce_urls[i].end(), rng);
+		}
+
+	} catch (const std::exception &ex)
+	{
+		// probably means the "announce-list" field is not present
+		// so we grab one from "announce" field
+		m_announce_urls.emplace_back();
+		m_announce_urls[0].emplace_back(
+			std::get<bencode::string_view>(m_torrent_data_view["announce"]));
+	}
+
+	// copy torrent to cache dir
+	const std::filesystem::path torrent_name =
+		std::filesystem::path(path_to_torrent).filename();
+	const std::filesystem::path path_to_destination =
+		config::get_path_to_cache_dir().append(std::string(torrent_name));
+	if (!std::filesystem::exists(path_to_destination))
+	{
+		std::filesystem::copy(path_to_torrent, path_to_destination);
+	}
 
 	std::filesystem::path output_file = config::get_path_to_downloads_dir() / m_filename;
 
@@ -126,19 +153,5 @@ Download::Download(const std::string &path_to_torrent)
 	{
 		std::ifstream output_file_stream(output_file, std::ios::in | std::ios::binary);
 		m_bitfield = message::Bitfield(output_file_stream, m_piece_length, m_pieces);
-	}
-
-	PeerConnection pc(m_peers[0].first, m_peers[0].second,
-			  { m_info_hash_binary.begin(), m_info_hash_binary.end() },
-			  m_connection_id);
-	try
-	{
-		while (true)
-		{
-			pc.proceed();
-		}
-	} catch (const std::runtime_error &e)
-	{
-		std::cout << e.what() << '\n';
 	}
 }

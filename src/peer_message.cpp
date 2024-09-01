@@ -3,15 +3,14 @@
 #include "utils.hpp"
 
 #include <arpa/inet.h>
-#include <cstddef>
 #include <netinet/in.h>
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,9 +21,9 @@ namespace message
 
 // Handshake
 
-Handshake::Handshake(const std::string &info_hash, const std::string &peer_id)
-	: m_info_hash{ info_hash }
-	, m_peer_id{ peer_id }
+Handshake::Handshake(std::string info_hash, std::string peer_id)
+	: m_info_hash{ std::move(info_hash) }
+	, m_peer_id{ std::move(peer_id) }
 {
 }
 
@@ -133,8 +132,8 @@ std::vector<uint8_t> Have::serialized() const
 
 // Bitfield
 
-Bitfield::Bitfield(std::vector<uint8_t> &&buffer)
-	: m_bitfield{ std::move(buffer) }
+Bitfield::Bitfield(std::vector<uint8_t> &&bitfield)
+	: m_bitfield{ std::move(bitfield) }
 {
 }
 
@@ -339,88 +338,6 @@ std::vector<uint8_t> Port::serialized() const
 	const uint16_t port = htons(m_port);
 	memcpy(ret.data() + 4 + 1, &port, sizeof port);
 	return ret;
-}
-
-Message read_message(const Socket &socket)
-{
-	const uint32_t len = ntohl(socket.recv_length());
-	if (len == 0)
-	{
-		return KeepAlive();
-	} else
-	{
-		const uint8_t id = socket.recv_some(len)[0];
-		switch (id)
-		{
-		case 0x00:
-			return Choke();
-		case 0x01:
-			return Unchoke();
-		case 0x02:
-			return Interested();
-		case 0x03:
-			return NotInterested();
-		case 0x04: {
-			std::vector<uint8_t> buffer = socket.recv_some(len - 1);
-			uint32_t index;
-			memcpy(&index, buffer.data(), sizeof index);
-			index = ntohl(index);
-			return Have(index);
-		}
-		case 0x05: {
-			std::vector<uint8_t> buffer = socket.recv_some(len - 1);
-			return Bitfield(std::move(buffer));
-		}
-		case 0x06: {
-			std::vector<uint8_t> buffer = socket.recv_some(len - 1);
-			uint32_t index;
-			uint32_t begin;
-			uint32_t length;
-			memcpy(&index, buffer.data(), sizeof index);
-			memcpy(&begin, buffer.data() + 4, sizeof begin);
-			memcpy(&length, buffer.data() + 4 + 4, sizeof length);
-			index = ntohl(index);
-			begin = ntohl(begin);
-			length = ntohl(length);
-
-			return Request(index, begin, length);
-		}
-		case 0x07: {
-			std::vector<uint8_t> prefix = socket.recv_some(4 + 4);
-			uint32_t index;
-			uint32_t begin;
-			memcpy(&index, prefix.data(), sizeof index);
-			memcpy(&begin, prefix.data() + 4, sizeof begin);
-			index = ntohl(index);
-			begin = ntohl(begin);
-			std::vector<uint8_t> buffer = socket.recv_some(len - 1 - 4 - 4);
-
-			return Piece(index, begin, std::move(buffer));
-		}
-		case 0x08: {
-			std::vector<uint8_t> buffer = socket.recv_some(len - 1);
-			uint32_t index;
-			uint32_t begin;
-			uint32_t length;
-			memcpy(&index, buffer.data(), sizeof index);
-			memcpy(&begin, buffer.data() + 4, sizeof begin);
-			memcpy(&length, buffer.data() + 4 + 4, sizeof length);
-			index = ntohl(index);
-			begin = ntohl(begin);
-			length = ntohl(length);
-
-			return Cancel(index, begin, length);
-		}
-		case 0x09: {
-			std::vector<uint8_t> buffer = socket.recv_some(len - 1);
-			uint16_t port;
-			memcpy(&port, buffer.data(), sizeof port);
-			return Port(port);
-		}
-		default:
-			throw std::runtime_error("Unexpected id value");
-		}
-	}
 }
 
 } // namespace message

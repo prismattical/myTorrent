@@ -1,14 +1,11 @@
 #pragma once
 
-#include "socket.hpp"
-
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <netinet/in.h>
 #include <string>
 #include <tuple>
-#include <variant>
 #include <vector>
 
 namespace message
@@ -23,7 +20,7 @@ private:
 	std::string m_peer_id;
 
 public:
-	Handshake(const std::string &info_hash, const std::string &peer_id);
+	Handshake(std::string info_hash, std::string peer_id);
 
 	[[nodiscard]] std::vector<uint8_t> serialized() const;
 
@@ -96,7 +93,7 @@ public:
 	/**
 	 * @brief Create bitfield from received message
 	 * 
-	 * @param buffer received message
+	 * @param bitfield received message
 	 */
 	Bitfield(std::vector<uint8_t> &&bitfield);
 
@@ -186,10 +183,5 @@ public:
 
 	[[nodiscard]] std::vector<uint8_t> serialized() const;
 };
-
-using Message = std::variant<KeepAlive, Choke, Unchoke, Interested, NotInterested, Have, Bitfield,
-			     Request, Piece, Cancel, Port>;
-
-Message read_message(const Socket &socket);
 
 } // namespace message

@@ -1,7 +1,9 @@
 #pragma once
 
 #include "peer_message.hpp"
+#include "peer_pool.hpp"
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,19 +15,16 @@ class Download {
 	std::string m_info_hash;
 	long long m_piece_length;
 	std::string_view m_pieces;
-	std::string m_announce_url;
 	std::string m_filename;
 	long long m_file_length;
+	std::vector<uint8_t> m_info_hash_binary;
+
 	std::string m_connection_id;
 
-	std::vector<unsigned char> m_info_hash_binary;
-
-	std::vector<std::pair<std::string, std::string>> m_peers;
+	std::vector<std::vector<std::string>> m_announce_urls;
+	PeerPool m_peer_pool;
 
 	message::Bitfield m_bitfield;
-
-	void fill_peer_list();
-	static void copy_torrent_to_cache(const std::string &path_to_torrent);
 
 public:
 	Download(const std::string &path_to_torrent);
