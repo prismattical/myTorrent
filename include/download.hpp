@@ -19,7 +19,7 @@ class Download {
 	long long m_file_length;
 	std::vector<uint8_t> m_info_hash_binary;
 
-	std::string m_connection_id;
+	// std::string m_connection_id;
 
 	std::vector<std::vector<std::string>> m_announce_urls;
 	PeerPool m_peer_pool;

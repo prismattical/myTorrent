@@ -2,11 +2,9 @@
 
 #include "bencode.hpp"
 #include "config.hpp"
-#include "peer_connection.hpp"
 #include "peer_message.hpp"
 #include "platform.hpp"
-#include "socket.hpp"
-#include "tracker_connection.hpp"
+
 #include "utils.hpp"
 
 #include <algorithm>
@@ -22,10 +20,8 @@
 #include <iostream>
 #include <iterator>
 #include <random>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <variant>
 #include <vector>
 
 /*
@@ -88,6 +84,7 @@ Download::Download(const std::string &path_to_torrent)
 
 		return torrent_string;
 	}() }
+	// , m_connection_id(utils::generate_random_connection_id())
 {
 	bencode::data_view m_torrent_data_view = bencode::decode_view(m_torrent_string);
 	bencode::data_view info_dict_data = m_torrent_data_view["info"];
@@ -98,7 +95,6 @@ Download::Download(const std::string &path_to_torrent)
 	m_pieces = std::get<bencode::string_view>(info_dict_data["pieces"]);
 	m_filename = std::string(std::get<bencode::string_view>(info_dict_data["name"]));
 	m_file_length = std::get<bencode::integer_view>(info_dict_data["length"]);
-	m_connection_id = utils::generate_random_connection_id();
 
 	// documentation for announce-list extension
 	// http://bittorrent.org/beps/bep_0012.html

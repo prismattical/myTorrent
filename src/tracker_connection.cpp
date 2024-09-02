@@ -31,8 +31,9 @@ void TrackerConnection::connect()
 	m_socket = Socket(m_hostname, m_port, Socket::TCP, Socket::IP_UNSPEC);
 }
 
-int TrackerConnection::send_http(const std::string &trk_hostname, const std::string &trk_resource,
-				 const std::string &info_hash, const std::string &upload_port)
+int TrackerConnection::send_http(
+	/*const std::string &trk_hostname, */ const std::string &trk_resource,
+	const std::string &info_hash, const std::string &upload_port)
 {
 	switch (m_send_state)
 	{
@@ -45,7 +46,7 @@ int TrackerConnection::send_http(const std::string &trk_hostname, const std::str
 
 		std::string request_str;
 		request_str += "GET " + query + " " + "HTTP/1.1" + "\r\n";
-		request_str += "Host: " + trk_hostname + "\r\n";
+		request_str += "Host: " + m_hostname + "\r\n";
 		request_str += "Connection: Close\r\n";
 		request_str += "Accept: text/plain\r\n";
 		request_str += "\r\n";

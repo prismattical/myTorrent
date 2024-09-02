@@ -41,7 +41,7 @@ public:
 	/**
 	 * @return 0 if send was successful, 1 if send was partial
 	 */
-	int send_http(const std::string &trk_hostname, const std::string &trk_resource,
+	int send_http(/*const std::string &trk_hostname, */ const std::string &trk_resource,
 		      const std::string &info_hash, const std::string &upload_port);
 	std::optional<std::string> recv_http();
 };
