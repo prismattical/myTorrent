@@ -2,19 +2,19 @@
 
 #include "socket.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
 class TrackerConnection {
+	static constexpr int m_recv_buffer_length = 4096;
+
 	enum class SendState {
 		FORM_REQUEST,
 		SEND_REQUEST,
 		MAX_SEND_STATES
-	};
-
-	enum class RecvState {
 	};
 
 	Socket m_socket;
@@ -27,7 +27,7 @@ class TrackerConnection {
 	size_t m_send_offset = 0;
 	SendState m_send_state = SendState::FORM_REQUEST;
 
-	std::vector<uint8_t> m_recv_buffer = std::vector<uint8_t>(4096, 0);
+	std::array<uint8_t, m_recv_buffer_length> m_recv_buffer;
 	size_t m_recv_offset = 0;
 
 public:
@@ -38,10 +38,8 @@ public:
 	[[nodiscard]] int get_socket_fd() const;
 
 	void connect();
-	/**
-	 * @return 0 if send was successful, 1 if send was partial
-	 */
-	int send_http(/*const std::string &trk_hostname, */ const std::string &trk_resource,
-		      const std::string &info_hash, const std::string &upload_port);
+	// returns 0 if send was successful, 1 if send was partial
+	int send_http(const std::string &trk_resource, const std::string &info_hash,
+		      const std::string &upload_port);
 	std::optional<std::string> recv_http();
 };

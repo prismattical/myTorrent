@@ -2,39 +2,40 @@
 
 #include "bencode.hpp"
 #include "config.hpp"
+#include "peer_connection.hpp"
 #include "peer_message.hpp"
 #include "platform.hpp"
 
 #include "utils.hpp"
 
-#include <algorithm>
 #include <arpa/inet.h>
-#include <cstddef>
-#include <exception>
 #include <netinet/in.h>
+#include <poll.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/poll.h>
 #include <vector>
 
-/*
-
-void Download::fill_peer_list()
+std::tuple<std::vector<std::pair<std::string, std::string>>, long long>
+Download::parse_tracker_response_http(const std::string &response)
 {
-	const auto [protocol, endpoint, path] = utils::parse_url(m_announce_url);
-	const auto [domain_name, port] = utils::parse_endpoint(endpoint);
-	TrackerConnection tr_conn(domain_name, port, m_connection_id);
-	tr_conn.send_http(endpoint, path, m_info_hash, "8765");
-	const std::string get_result = tr_conn.recv_http_request();
-	const auto [return_code, body] = utils::parse_http_response(get_result);
+	const auto [return_code, body] = utils::parse_http_response(response);
 	auto response_data = bencode::decode(body);
+
+	std::vector<std::pair<std::string, std::string>> peer_addresses;
+
 	if (std::holds_alternative<bencode::list>(response_data["peers"]))
 	{
 		const auto peer_list = std::get<bencode::list>(response_data["peers"]);
@@ -45,7 +46,7 @@ void Download::fill_peer_list()
 			const auto port =
 				std::to_string(std::get<bencode::integer>(peer_dict["port"]));
 
-			m_peers.push_back({ ip, port });
+			peer_addresses.emplace_back(ip, port);
 		}
 	} else if (std::holds_alternative<bencode::string>(response_data["peers"]))
 	{
@@ -62,18 +63,22 @@ void Download::fill_peer_list()
 			memcpy(&ip, peer_string.data() + i, sizeof ip);
 			memcpy(&port, peer_string.data() + i + sizeof ip, sizeof port);
 
-			m_peers.push_back({ Socket::ntop(ip), std::to_string(ntohs(port)) });
+			peer_addresses.emplace_back(Socket::ntop(ip), std::to_string(ntohs(port)));
 		}
 	} else
 	{
 		throw std::runtime_error("HTTP response could not be decoded");
 	}
-	for (const auto &peer : m_peers)
+
+	long long interval = std::get<bencode::integer>(response_data["interval"]);
+
+	for (const auto &peer : peer_addresses)
 	{
 		std::cout << peer.first << ":" << peer.second << '\n';
 	}
+
+	return { peer_addresses, interval };
 }
-*/
 
 Download::Download(const std::string &path_to_torrent)
 	: m_torrent_string{ [&]() {
@@ -84,7 +89,6 @@ Download::Download(const std::string &path_to_torrent)
 
 		return torrent_string;
 	}() }
-	// , m_connection_id(utils::generate_random_connection_id())
 {
 	bencode::data_view m_torrent_data_view = bencode::decode_view(m_torrent_string);
 	bencode::data_view info_dict_data = m_torrent_data_view["info"];
@@ -129,19 +133,18 @@ Download::Download(const std::string &path_to_torrent)
 	}
 
 	// copy torrent to cache dir
-	const std::filesystem::path torrent_name =
-		std::filesystem::path(path_to_torrent).filename();
-	const std::filesystem::path path_to_destination =
+	using namespace std::filesystem;
+	const path torrent_name = path(path_to_torrent).filename();
+	const path path_to_destination =
 		config::get_path_to_cache_dir().append(std::string(torrent_name));
-	if (!std::filesystem::exists(path_to_destination))
+	if (!exists(path_to_destination))
 	{
-		std::filesystem::copy(path_to_torrent, path_to_destination);
+		copy(path_to_torrent, path_to_destination);
 	}
 
-	std::filesystem::path output_file = config::get_path_to_downloads_dir() / m_filename;
+	path output_file = config::get_path_to_downloads_dir() / m_filename;
 
-	if (!std::filesystem::exists(output_file) ||
-	    std::filesystem::file_size(output_file) != static_cast<uintmax_t>(m_file_length))
+	if (!exists(output_file) || file_size(output_file) != static_cast<uintmax_t>(m_file_length))
 	{
 		utils::preallocate_file(output_file, m_file_length);
 		m_bitfield = message::Bitfield(m_pieces.length() / 20);
@@ -149,5 +152,89 @@ Download::Download(const std::string &path_to_torrent)
 	{
 		std::ifstream output_file_stream(output_file, std::ios::in | std::ios::binary);
 		m_bitfield = message::Bitfield(output_file_stream, m_piece_length, m_pieces);
+	}
+}
+
+void Download::connect_to_tracker()
+{
+	const auto announce_url = m_announce_urls[m_last_tracker_tier][m_last_tracker_tier_index];
+
+	// TODO: rewrite parse_url function
+	const auto [protocol, endpoint, _] = utils::parse_url(announce_url);
+	const auto [domain_name, port] = utils::parse_endpoint(endpoint);
+
+	m_tracker = TrackerConnection(domain_name, port, m_connection_id);
+	m_tracker.connect();
+	m_fds.back().fd = m_tracker.get_socket_fd();
+	m_fds.back().events = POLLOUT;
+}
+
+void Download::connect_to_new_peers(
+	const std::vector<std::pair<std::string, std::string>> &peer_addrs)
+{
+	for (size_t i = 0; i < m_peers.size(); ++i)
+	{
+		try
+		{
+			m_peers[i] = PeerConnection(peer_addrs[i].first, peer_addrs[i].second,
+						    m_info_hash_binary, m_connection_id);
+			m_fds[i].fd = m_peers[i].get_socket_fd();
+			m_fds[i].events =
+				POLLOUT; // wait until sock available for write to validate connection
+		} catch (const std::runtime_error &ex)
+		{
+			// TODO: logging
+			continue;
+		}
+	}
+}
+
+void Download::download()
+{
+	connect_to_tracker();
+	while (true)
+	{
+		int rc = poll(m_fds.data(), m_fds.size(), m_timeout);
+		if (rc > 0) // on success
+		{
+			// check tracker if connected
+			if (m_fds.back().fd != -1)
+			{
+				if ((m_fds.back().revents & POLLOUT) != 0)
+				{
+					if (m_tracker.send_http("/announce", m_info_hash, "8765") ==
+					    0)
+					{ // on success change events to wait for repsonse
+						m_fds.back().events = POLLIN;
+					} else
+					{ // on partial send poll until the next write is available
+						m_fds.back().events = POLLOUT;
+					}
+				} else if ((m_fds.back().revents & POLLIN) != 0)
+				{
+					const std::string http_response =
+						m_tracker.recv_http().value_or("-1");
+					if (http_response != "-1")
+					{ // on success turn off polling for tracker fd
+						m_fds.back().fd = -1;
+
+						const auto [peer_addrs, interval] =
+							parse_tracker_response_http(http_response);
+						// connect_to_new_peers(peer_addrs);
+					} else // on partial read wait until the next read
+					{
+						m_fds.back().events = POLLIN;
+					}
+				}
+			}
+		} else if (rc == 0)
+		{
+			// on timeout
+			throw std::runtime_error("poll() timeout expired");
+		} else
+		{
+			// on error
+			throw std::runtime_error(std::string("poll(): ") + strerror(errno));
+		}
 	}
 }

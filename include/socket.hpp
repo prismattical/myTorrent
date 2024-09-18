@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -45,8 +46,8 @@ public:
 
 	void validate_connect() const;
 
-	void send(const std::vector<uint8_t> &buffer, size_t &offset) const;
-	void recv(std::vector<uint8_t> &buffer, size_t &offset) const;
+	void send(std::span<const uint8_t> buffer, size_t &offset) const;
+	void recv(std::span<uint8_t> buffer, size_t &offset) const;
 
 	[[nodiscard]] bool connected() const;
 	[[nodiscard]] int get_fd() const;

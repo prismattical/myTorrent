@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -21,130 +22,147 @@ namespace message
 
 // Handshake
 
-Handshake::Handshake(std::string info_hash, std::string peer_id)
-	: m_info_hash{ std::move(info_hash) }
-	, m_peer_id{ std::move(peer_id) }
+Handshake::Handshake(const std::span<const uint8_t> info_hash,
+		     const std::span<const uint8_t> peer_id)
 {
+	std::copy(info_hash.begin(), info_hash.end(), m_data.begin() + 1 + 19 + 8);
+	std::copy(peer_id.begin(), peer_id.end(), m_data.begin() + 1 + 19 + 8 + 20);
 }
 
-std::vector<uint8_t> Handshake::serialized() const
+Handshake::Handshake(std::span<const uint8_t> handshake)
 {
-	std::vector<uint8_t> ret(49 + m_pstrlen, 0);
-	ret[0] = m_pstrlen;
-	std::copy(m_pstr.begin(), m_pstr.end(), ret.begin() + 1);
-	std::copy(m_reserved.begin(), m_reserved.end(), ret.begin() + 1 + m_pstrlen);
-	std::copy(m_info_hash.begin(), m_info_hash.end(), ret.begin() + 1 + m_pstrlen + 8);
-	std::copy(m_peer_id.begin(), m_peer_id.end(), ret.begin() + 1 + m_pstrlen + 8 + 20);
-	return ret;
+	std::copy(handshake.begin(), handshake.end(), m_data.begin());
 }
 
-uint8_t Handshake::pstrlen() const
+std::span<const uint8_t> Handshake::serialized() const &
 {
-	return m_pstrlen;
+	return m_data;
 }
 
-void Handshake::pstr(const std::string &pstr)
+std::span<const uint8_t> Handshake::get_pstrlen() const
 {
-	m_pstrlen = pstr.size();
-	m_pstr = pstr;
-}
-std::string Handshake::pstr() const
-{
-	return m_pstr;
+	return { m_data.begin(), 1 };
 }
 
-void Handshake::info_hash(const std::string &info_hash)
+std::span<const uint8_t> Handshake::get_pstr() const
 {
-	m_info_hash = info_hash;
-}
-std::string Handshake::info_hash() const
-{
-	return m_info_hash;
+	return { m_data.begin() + 1, 19 };
 }
 
-void Handshake::peer_id(const std::string &peer_id)
+std::span<const uint8_t> Handshake::get_reserved() const
 {
-	m_peer_id = peer_id;
+	return { m_data.begin() + 1 + 19, 8 };
 }
-std::string Handshake::peer_id() const
+
+void Handshake::set_info_hash(std::span<const uint8_t> info_hash)
 {
-	return m_peer_id;
+	std::copy(info_hash.begin(), info_hash.end(), m_data.begin() + 1 + 19 + 8);
+}
+
+std::span<const uint8_t> Handshake::get_info_hash() const
+{
+	return { m_data.begin() + 1 + 19 + 8, 20 };
+}
+
+void Handshake::set_peer_id(std::span<const uint8_t> peer_id)
+{
+	std::copy(peer_id.begin(), peer_id.end(), m_data.begin() + 1 + 19 + 8 + 20);
+}
+std::span<const uint8_t> Handshake::get_peer_id() const
+{
+	return { m_data.begin() + 1 + 19 + 8 + 20, 20 };
 }
 
 // KeepAlive
 
-std::vector<uint8_t> KeepAlive::serialized() const
+std::span<const uint8_t> KeepAlive::serialized() const &
 {
-	return { 0x00, 0x00, 0x00, 0x00 };
+	return m_data;
 }
 
 // Choke
 
-std::vector<uint8_t> Choke::serialized() const
+std::span<const uint8_t> Choke::serialized() const &
 {
-	return { 0x00, 0x00, 0x00, 0x01, 0x00 };
+	return m_data;
 }
 
 // Unchoke
 
-std::vector<uint8_t> Unchoke::serialized() const
+std::span<const uint8_t> Unchoke::serialized() const &
 {
-	return { 0x00, 0x00, 0x00, 0x01, 0x01 };
+	return m_data;
 }
 
 // Interested
 
-std::vector<uint8_t> Interested::serialized() const
+std::span<const uint8_t> Interested::serialized() const &
 {
-	return { 0x00, 0x00, 0x00, 0x01, 0x02 };
+	return m_data;
 }
 
 // NotInterested
 
-std::vector<uint8_t> NotInterested::serialized() const
+std::span<const uint8_t> NotInterested::serialized() const &
 {
-	return { 0x00, 0x00, 0x00, 0x01, 0x03 };
+	return m_data;
 }
 
 // Have
 
+Have::Have(std::span<const uint8_t> have)
+{
+	std::copy(have.begin(), have.end(), m_data.begin());
+}
+
 Have::Have(uint32_t index)
-	: m_index{ index }
 {
+	set_index(index);
 }
 
-void Have::index(uint32_t index)
+void Have::set_index(uint32_t index)
 {
-	m_index = index;
+	index = htonl(index);
+	memcpy(m_data.data() + 4 + 1, &index, sizeof index);
 }
-uint32_t Have::index() const
+uint32_t Have::get_index() const
 {
-	return m_index;
+	uint32_t index;
+	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
+	return ntohl(index);
 }
 
-std::vector<uint8_t> Have::serialized() const
+std::span<const uint8_t> Have::serialized() const &
 {
-	std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x05, 0x04, 0x00, 0x00, 0x00, 0x00 };
-	const uint32_t index = htonl(m_index);
-	memcpy(ret.data() + 4 + 1, &index, sizeof index);
-	return ret;
+	return m_data;
 }
 
 // Bitfield
 
+void Bitfield::set_message_length(uint32_t length)
+{
+	length = htonl(length);
+	memcpy(m_data.data(), &length, sizeof length);
+}
+
 Bitfield::Bitfield(std::vector<uint8_t> &&bitfield)
-	: m_bitfield{ std::move(bitfield) }
+	: m_data{ std::move(bitfield) }
 {
 }
 
 Bitfield::Bitfield(const size_t length)
-	: m_bitfield((length - 1) / 8 + 1, 0)
+	: m_data(5 + ((length - 1) / 8 + 1), 0)
 {
+	set_message_length(m_data.size() - 4);
+	m_data[4] = 5;
 }
 
 Bitfield::Bitfield(std::ifstream &file, const long long piece_length, const std::string_view hashes)
-	: Bitfield(hashes.length() / 20)
+	: Bitfield(5 + hashes.length() / 20)
 {
+	set_message_length(m_data.size() - 4);
+	m_data[4] = 5;
+
 	std::vector<unsigned char> buffer(piece_length);
 	for (size_t i = 0; i < hashes.size() / 20; i += 20)
 	{
@@ -158,186 +176,197 @@ Bitfield::Bitfield(std::ifstream &file, const long long piece_length, const std:
 	}
 }
 
-void Bitfield::set_index(size_t index, bool value) noexcept
+void Bitfield::set_index(const size_t index, const bool value) noexcept
 {
 	if (value)
 	{
-		m_bitfield[index / 8] |= static_cast<uint8_t>(1) << (7 - index % 8);
+		m_data[5 + index / 8] |= static_cast<uint8_t>(1) << (7 - index % 8);
 	} else
 	{
-		m_bitfield[index / 8] &= ~(static_cast<uint8_t>(1) << (7 - index % 8));
+		m_data[5 + index / 8] &= ~(static_cast<uint8_t>(1) << (7 - index % 8));
 	}
 }
 
-std::tuple<std::vector<uint8_t>, const std::vector<uint8_t> &> Bitfield::serialized() const
+bool Bitfield::get_index(const size_t index) const noexcept
 {
-	std::vector<uint8_t> prefix(5, 0);
-	prefix[4] = 0x05;
-	const uint32_t len = htonl(1 + m_bitfield.size());
-	memcpy(prefix.data(), &len, sizeof len);
-	return { prefix, m_bitfield };
+	return (m_data[5 + index / 8] & static_cast<uint8_t>(1) << (7 - index % 8)) != 0;
+}
+
+size_t Bitfield::get_container_size() const
+{
+	return m_data.size();
+}
+
+std::span<const uint8_t> Bitfield::serialized() const &
+{
+	return m_data;
 }
 
 // Request
 
-Request::Request(uint32_t index, uint32_t begin, uint32_t length)
-	: m_index{ index }
-	, m_begin{ begin }
-	, m_length{ length }
+Request::Request(std::span<const uint8_t> request)
 {
+	std::copy(request.begin(), request.end(), m_data.begin());
 }
-uint32_t Request::get_index() const
+
+Request::Request(uint32_t index, uint32_t begin, uint32_t length)
 {
-	return m_index;
+	set_index(index);
+	set_begin(begin);
+	set_length(length);
 }
 void Request::set_index(uint32_t index)
 {
-	m_index = index;
+	index = htonl(index);
+	memcpy(m_data.data() + 4 + 1, &index, sizeof index);
 }
-uint32_t Request::get_begin() const
+uint32_t Request::get_index() const
 {
-	return m_begin;
+	uint32_t index;
+	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
+	return ntohl(index);
 }
 void Request::set_begin(uint32_t begin)
 {
-	m_begin = begin;
+	begin = htonl(begin);
+	memcpy(m_data.data() + 4 + 1 + 4, &begin, sizeof begin);
 }
-uint32_t Request::get_length() const
+uint32_t Request::get_begin() const
 {
-	return m_length;
+	uint32_t begin;
+	memcpy(&begin, m_data.data() + 4 + 1 + 4, sizeof begin);
+	return ntohl(begin);
 }
 void Request::set_length(uint32_t length)
 {
-	m_length = length;
+	length = htonl(length);
+	memcpy(m_data.data() + 4 + 1 + 4 + 4, &length, sizeof length);
+}
+uint32_t Request::get_length() const
+{
+	uint32_t length;
+	memcpy(&length, m_data.data() + 4 + 1 + 4 + 4, sizeof length);
+	return ntohl(length);
 }
 
-std::vector<uint8_t> Request::serialized() const
+std::span<const uint8_t> Request::serialized() const &
 {
-	std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x0D, 0x06, 0x00, 0x00, 0x00, 0x00,
-				  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-
-	const uint32_t index = htonl(m_index);
-	const uint32_t begin = htonl(m_begin);
-	const uint32_t length = htonl(m_length);
-
-	memcpy(ret.data() + 4 + 1, &index, sizeof index);
-	memcpy(ret.data() + 4 + 1 + 4, &begin, sizeof begin);
-	memcpy(ret.data() + 4 + 1 + 4 + 4, &length, sizeof length);
-
-	return ret;
+	return m_data;
 }
 
 // Piece
 
-Piece::Piece(uint32_t index, uint32_t begin, std::vector<uint8_t> &&block)
-	: m_index(index)
-	, m_begin(begin)
-	, m_block(std::move(block))
+Piece::Piece(std::vector<uint8_t> &&piece)
+	: m_data(std::move(piece))
 {
 }
 
-uint32_t Piece::get_index() const
-{
-	return m_index;
-}
 void Piece::set_index(uint32_t index)
 {
-	m_index = index;
+	index = htonl(index);
+	memcpy(m_data.data() + 4 + 1, &index, sizeof index);
 }
-uint32_t Piece::get_begin() const
+uint32_t Piece::get_index() const
 {
-	return m_begin;
+	uint32_t index;
+	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
+	return ntohl(index);
 }
 void Piece::set_begin(uint32_t begin)
 {
-	m_begin = begin;
+	begin = htonl(begin);
+	memcpy(m_data.data() + 4 + 1 + 4, &begin, sizeof begin);
+}
+uint32_t Piece::get_begin() const
+{
+	uint32_t begin;
+	memcpy(&begin, m_data.data() + 4 + 1 + 4, sizeof begin);
+	return ntohl(begin);
 }
 
-std::tuple<std::vector<uint8_t>, const std::vector<uint8_t> &> Piece::serialized() const
+uint32_t Piece::get_length() const
 {
-	std::vector<uint8_t> prefix(13, 0);
-	prefix[4] = 0x07;
-	const uint32_t length = htonl(9 + m_block.size());
-	const uint32_t index = htonl(m_index);
-	const uint32_t begin = htonl(m_begin);
-	memcpy(prefix.data(), &length, sizeof length);
-	memcpy(prefix.data(), &index, sizeof index);
-	memcpy(prefix.data(), &begin, sizeof begin);
+	return m_data.size() - 13;
+}
 
-	return { prefix, m_block };
+std::span<const uint8_t> Piece::serialized() const &
+{
+	return m_data;
 }
 
 // Cancel
+Cancel::Cancel(std::span<const uint8_t> cancel)
+{
+	std::copy(cancel.begin(), cancel.end(), m_data.begin());
+}
 
 Cancel::Cancel(uint32_t index, uint32_t begin, uint32_t length)
-	: m_index{ index }
-	, m_begin{ begin }
-	, m_length{ length }
 {
-}
-uint32_t Cancel::get_index() const
-{
-	return m_index;
+	set_index(index);
+	set_begin(begin);
+	set_length(length);
 }
 void Cancel::set_index(uint32_t index)
 {
-	m_index = index;
+	index = htonl(index);
+	memcpy(m_data.data() + 4 + 1, &index, sizeof index);
 }
-uint32_t Cancel::get_begin() const
+uint32_t Cancel::get_index() const
 {
-	return m_begin;
+	uint32_t index;
+	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
+	return ntohl(index);
 }
 void Cancel::set_begin(uint32_t begin)
 {
-	m_begin = begin;
+	begin = htonl(begin);
+	memcpy(m_data.data() + 4 + 1 + 4, &begin, sizeof begin);
 }
-uint32_t Cancel::get_length() const
+uint32_t Cancel::get_begin() const
 {
-	return m_length;
+	uint32_t begin;
+	memcpy(&begin, m_data.data() + 4 + 1 + 4, sizeof begin);
+	return ntohl(begin);
 }
 void Cancel::set_length(uint32_t length)
 {
-	m_length = length;
+	length = htonl(length);
+	memcpy(m_data.data() + 4 + 1 + 4 + 4, &length, sizeof length);
+}
+uint32_t Cancel::get_length() const
+{
+	uint32_t length;
+	memcpy(&length, m_data.data() + 4 + 1 + 4 + 4, sizeof length);
+	return ntohl(length);
 }
 
-std::vector<uint8_t> Cancel::serialized() const
+std::span<const uint8_t> Cancel::serialized() const &
 {
-	std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x0D, 0x08, 0x00, 0x00, 0x00, 0x00,
-				  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-
-	const uint32_t index = htonl(m_index);
-	const uint32_t begin = htonl(m_begin);
-	const uint32_t length = htonl(m_length);
-
-	memcpy(ret.data() + 4 + 1, &index, sizeof index);
-	memcpy(ret.data() + 4 + 1 + 4, &begin, sizeof begin);
-	memcpy(ret.data() + 4 + 1 + 4 + 4, &length, sizeof length);
-
-	return ret;
+	return m_data;
 }
 
 // Port
 
 Port::Port(uint16_t port)
-	: m_port(port)
 {
+	set_port(port);
 }
 
-uint16_t Port::get_port() const
-{
-	return m_port;
-}
 void Port::set_port(uint16_t port)
 {
-	m_port = port;
+	port = htons(port);
+	memcpy(m_data.data() + 4 + 1, &port, sizeof port);
+}
+uint16_t Port::get_port() const
+{
+	uint16_t port;
+	memcpy(&port, m_data.data() + 4 + 1, sizeof port);
+	return ntohs(port);
 }
 
-std::vector<uint8_t> Port::serialized() const
+std::span<const uint8_t> Port::serialized() const &
 {
-	std::vector<uint8_t> ret{ 0x00, 0x00, 0x00, 0x03, 0x09, 0x00, 0x00 };
-	const uint16_t port = htons(m_port);
-	memcpy(ret.data() + 4 + 1, &port, sizeof port);
-	return ret;
+	return m_data;
 }
 
 } // namespace message

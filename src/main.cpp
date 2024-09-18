@@ -8,6 +8,7 @@ int main()
 	config::create_downloads_dir();
 
 	Download test_dl("torrents/debian.torrent");
+	test_dl.download();
 
 	return 0;
 }

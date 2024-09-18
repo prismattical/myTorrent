@@ -4,40 +4,19 @@
 #include "socket.hpp"
 
 #include <cstdint>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <variant>
 #include <vector>
 
 class PeerConnection {
-	enum class States {
-		NOT_CONNECTED,
+	static constexpr int m_max_block_size = 16384;
 
-		SEND_HS,
-		SEND_KEEPALIVE,
-		SEND_CHOKE,
-		SEND_UNCHOKE,
-		SEND_INTERESTED,
-		SEND_NOTINTERESTED,
-		SEND_HAVE,
-		SEND_BITFIELD,
-		SEND_REQUEST,
-		SEND_PIECE,
-		SEND_CANCEL,
-		SEND_PORT,
-		// handshake
-		RECV_HSLEN,
-		RECV_HSPRTCL,
-		RECV_HSRSRVD,
-		RECV_HSINFOHASH,
-		RECV_HSPEERID,
-		// common
-		RECV_LENGTH,
-		RECV_ID,
-		// specific
-		RECV_HAVE,
-		RECV_BITFIELD,
-		RECV_REQUEST,
-		RECV_PIECE,
-		RECV_CANCEL,
-		RECV_PORT,
+	enum class States {
+		HANDSHAKE,
+		LENGTH,
+		MESSAGE,
 
 		MAX_STATES,
 	};
@@ -50,24 +29,34 @@ class PeerConnection {
 	bool m_peer_choking = true;
 	bool m_am_interested = false;
 
-	States m_state = States::RECV_HSLEN;
+	States m_state = States::HANDSHAKE;
 
-	// TODO: decide on buffer reserve value
-	std::vector<uint8_t> m_recv_buffer = std::vector<uint8_t>(4096, 0);
+	/*const*/ size_t m_default_recv_buffer_length;
+	std::vector<uint8_t> m_recv_buffer;
 	size_t m_recv_offset = 0;
 
-	std::vector<uint8_t> m_send_buffer;
+	std::deque<std::unique_ptr<message::Message>> m_send_queue;
+	std::unique_ptr<message::Message> m_current_send;
+	std::span<const uint8_t> m_send_buffer;
 	size_t m_send_offset = 0;
 
 	uint32_t m_message_length;
-	std::string m_info_hash_binary;
-	message::Bitfield m_bitfield;
-	message::Request m_current_request;
+	// view of memory owned by Download object
+	/*const*/ std::span<const uint8_t> m_info_hash_binary;
+	message::Bitfield m_peer_bitfield;
+
+	void proceed_message();
 
 public:
 	PeerConnection() = default;
 	PeerConnection(const std::string &ip, const std::string &port,
-		       const std::string &info_hash_binary, const std::string &peer_id);
+		       std::span<const uint8_t> info_hash_binary, std::span<const uint8_t> peer_id,
+		       std::variant<std::reference_wrapper<const message::Bitfield>, size_t>
+			       bitfield_or_length);
 
-	void proceed();
+	int proceed_recv();
+	int proceed_send();
+
+	[[nodiscard]] bool get_socket_status() const;
+	[[nodiscard]] int get_socket_fd() const;
 };

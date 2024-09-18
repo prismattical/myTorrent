@@ -200,7 +200,7 @@ void Socket::validate_connect() const
 	m_connected = true;
 }
 
-void Socket::send(const std::vector<uint8_t> &buffer, size_t &offset) const
+void Socket::send(const std::span<const uint8_t> buffer, size_t &offset) const
 {
 	size_t total = offset;
 	size_t bytesleft = buffer.size() - total;
@@ -238,7 +238,7 @@ void Socket::send(const std::vector<uint8_t> &buffer, size_t &offset) const
 	offset = 0;
 }
 
-void Socket::recv(std::vector<uint8_t> &buffer, size_t &offset) const
+void Socket::recv(const std::span<uint8_t> buffer, size_t &offset) const
 {
 	size_t len = buffer.size() - offset;
 	ssize_t bytes_received = 0;

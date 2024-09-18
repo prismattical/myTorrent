@@ -3,246 +3,179 @@
 #include "peer_message.hpp"
 #include "socket.hpp"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <netinet/in.h>
+#include <functional>
+#include <memory>
+#include <stdexcept>
 #include <string>
+#include <utility>
+#include <variant>
 
-PeerConnection::PeerConnection(const std::string &ip, const std::string &port,
-			       const std::string &info_hash_binary, const std::string &peer_id)
+bool PeerConnection::get_socket_status() const
+{
+	return m_socket.connected();
+}
+
+int PeerConnection::get_socket_fd() const
+{
+	return m_socket.get_fd();
+}
+
+void PeerConnection::proceed_message()
+{
+	switch (m_recv_buffer[4] /*id of the message*/)
+	{
+	case 0:
+		// no need to construct this message
+		m_am_choking = true;
+		// should be return with notification after choking happens
+		break;
+	case 1:
+		// no need to construct this message
+		m_am_choking = false;
+		// should be return with notification after unchoking happens
+		break;
+	case 2:
+		// no need to construct this message
+		m_peer_interested = true;
+		break;
+	case 3:
+		// no need to construct this message
+		m_peer_interested = false;
+		break;
+	case 4: {
+		auto have = message::Have({ m_recv_buffer.data(), 9 });
+		m_peer_bitfield.set_index(have.get_index(), true);
+		// should notify that new pieces may be available
+		break;
+	}
+	case 5: {
+		// TODO fix bug
+		m_peer_bitfield = message::Bitfield(std::move(m_recv_buffer));
+		m_recv_buffer.resize(m_default_recv_buffer_length);
+		// should notify that new pieces may be available
+		break;
+	}
+	case 6: {
+		auto request = message::Request({ m_recv_buffer.data(), 17 });
+		// should notify that piece was requested
+		break;
+	}
+	case 7: {
+		auto piece = message::Piece(std::move(m_recv_buffer));
+		m_recv_buffer.resize(m_default_recv_buffer_length);
+		// should notify and move away the piece
+		break;
+	}
+	case 8: {
+		auto cancel = message::Cancel({ m_recv_buffer.data(), 17 });
+		break;
+	}
+	case 9:
+		// do nothing because not implemented
+		break;
+	default:
+		throw std::runtime_error("Invalid message id value");
+	}
+}
+
+PeerConnection::PeerConnection(
+	const std::string &ip, const std::string &port, std::span<const uint8_t> info_hash_binary,
+	std::span<const uint8_t> peer_id,
+	std::variant<std::reference_wrapper<const message::Bitfield>, size_t> bitfield_or_length)
 	: m_socket{ ip, port, Socket::TCP, Socket::IP_UNSPEC }
 	, m_info_hash_binary{ info_hash_binary }
 {
-	// message::Handshake hs(info_hash_binary, peer_id);
-	// auto hs_ser = hs.serialized();
-	// m_socket.send(hs_ser);
+	m_send_queue.emplace_back(std::make_unique<message::Handshake>(info_hash_binary, peer_id));
+
+	using message::Bitfield;
+	if (std::holds_alternative<std::reference_wrapper<const Bitfield>>(bitfield_or_length))
+	{
+		const Bitfield &bf =
+			std::get<std::reference_wrapper<const Bitfield>>(bitfield_or_length).get();
+
+		m_send_queue.emplace_back(std::make_unique<Bitfield>(bf));
+
+		m_default_recv_buffer_length = bf.get_container_size();
+	} else
+	{
+		m_default_recv_buffer_length = std::get<size_t>(bitfield_or_length);
+	}
+
+	// 68 is the size of the handshake message
+	m_default_recv_buffer_length = std::max<size_t>(m_default_recv_buffer_length, 68);
 }
 
-void PeerConnection::proceed()
+int PeerConnection::proceed_recv()
 {
 	switch (m_state)
 	{
-	case States::RECV_HSLEN: {
-		m_recv_buffer.resize(1);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
+	case States::HANDSHAKE:
+		m_socket.recv({ m_recv_buffer.data(), 68 }, m_recv_offset);
 		if (m_recv_offset == 0)
 		{
-			const uint8_t len = m_recv_buffer[0];
-			if (len != 19)
+			message::Handshake hs({ m_recv_buffer.data(), 68 });
+			if (hs.get_pstrlen()[0] != 19 ||
+			    memcmp(hs.get_pstr().data(), "BitTorrent protocol", 19) != 0 ||
+			    memcmp(hs.get_info_hash().data(), m_info_hash_binary.data(), 20) != 0)
 			{
-				throw std::runtime_error(
-					"Handshake: invalid protocol length received");
+				throw std::runtime_error("Invalid peer handshake");
 			}
-			m_state = States::RECV_HSPRTCL;
+			m_state = States::LENGTH;
 		}
 		break;
-	}
-
-	case States::RECV_HSPRTCL: {
-		m_recv_buffer.resize(19);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
+	case States::LENGTH:
+		m_socket.recv({ m_recv_buffer.data(), 4 }, m_recv_offset);
 		if (m_recv_offset == 0)
 		{
-			if (memcmp(reinterpret_cast<char *>(m_recv_buffer.data()), "BitTorrent protocol",
-				   19) != 0)
-			{
-				throw std::runtime_error(
-					"Handshake: invalid protocol name received");
-			}
-
-			m_state = States::RECV_HSRSRVD;
-		}
-		break;
-	}
-
-	case States::RECV_HSRSRVD: {
-		m_recv_buffer.resize(8);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
-		if (m_recv_offset == 0)
-		{
-			// No extensions implemented so this part is just empty
-
-			m_state = States::RECV_HSINFOHASH;
-		}
-		break;
-	}
-
-	case States::RECV_HSINFOHASH: {
-		m_recv_buffer.resize(10);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
-		if (m_recv_offset == 0)
-		{
-			if (memcmp(reinterpret_cast<char *>(m_recv_buffer.data()),
-				   m_info_hash_binary.data(), 10) != 0)
-			{
-				throw std::runtime_error("Handshake: invalid info hash received");
-			}
-			m_state = States::RECV_HSPEERID;
-		}
-		break;
-	}
-
-	case States::RECV_HSPEERID: {
-		m_recv_buffer.resize(10);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
-		if (m_recv_offset == 0)
-		{
-			// additional check for peer id can be added
-
-			m_state = States::RECV_LENGTH;
-		}
-		break;
-	}
-
-	case States::RECV_LENGTH: {
-		m_recv_buffer.resize(4);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
-		if (m_recv_offset == 0)
-		{
-			memcpy(&m_message_length, m_recv_buffer.data(), sizeof m_message_length);
+			memcpy(&m_message_length, m_recv_buffer.data(), sizeof(m_message_length));
 			m_message_length = ntohl(m_message_length);
-			if (m_message_length != 0)
+			if (m_message_length == 0)
 			{
-				m_state = States::RECV_ID;
-			} else
-			{
-				// TODO: parse KeepAlive message
-			}
-		}
-		break;
-	}
-
-	case States::RECV_ID: {
-		m_recv_buffer.resize(1);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
-		if (m_recv_offset == 0)
-		{
-			const uint8_t id = m_recv_buffer[0];
-			switch (id)
-			{
-			case 0:
-				m_am_choking = true;
-				m_state = States::RECV_LENGTH;
-				break;
-			case 1:
-				m_am_choking = false;
-				m_state = States::RECV_LENGTH;
-				break;
-			case 2:
-				m_peer_interested = true;
-				m_state = States::RECV_LENGTH;
-				break;
-			case 3:
-				m_peer_interested = false;
-				m_state = States::RECV_LENGTH;
-				break;
-			case 4:
-				m_state = States::RECV_HAVE;
-				break;
-			case 5:
-				m_state = States::RECV_BITFIELD;
-				break;
-			case 6:
-				m_state = States::RECV_REQUEST;
-				break;
-			case 7:
-				m_state = States::RECV_PIECE;
-				break;
-			case 8:
-				m_state = States::RECV_CANCEL;
-				break;
-			case 9:
-				m_state = States::RECV_PORT;
-				break;
-			default:
+				// proceed KeepAlive message
 				break;
 			}
+			if (m_message_length > m_default_recv_buffer_length)
+			{
+				m_default_recv_buffer_length = m_message_length;
+				m_recv_buffer.resize(m_default_recv_buffer_length);
+			}
+			m_state = States::MESSAGE;
 		}
-		break;
-	}
-
-	case States::RECV_HAVE: {
-		m_recv_buffer.resize(4);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
+		[[fallthrough]]; // this can save a spare call to poll()
+	case States::MESSAGE:
+		m_socket.recv({ m_recv_buffer.data() + 4, m_message_length }, m_recv_offset);
 		if (m_recv_offset == 0)
 		{
-			uint32_t index;
-			memcpy(&index, m_recv_buffer.data(), sizeof index);
-			index = ntohl(index);
-
-			m_bitfield.set_index(index, true);
-
-			// TODO: if new piece is needed, request it
-
-			m_state = States::RECV_LENGTH;
+			proceed_message();
+			m_state = States::LENGTH;
 		}
 		break;
+	default:
+		throw std::runtime_error("Invalid state value");
 	}
+}
 
-	case States::RECV_BITFIELD: {
-		m_recv_buffer.resize(m_message_length - 1);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
-		if (m_recv_offset == 0)
+int PeerConnection::proceed_send()
+{
+	if (m_send_offset == 0)
+	{
+		if (!m_send_queue.empty())
 		{
-			m_bitfield = message::Bitfield(std::move(m_recv_buffer));
-
-			// TODO: if pieces from bitfield are needed, request them
-
-			m_state = States::RECV_LENGTH;
-		}
-		break;
-	}
-
-	case States::RECV_REQUEST: {
-		m_recv_buffer.resize(12);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
-		if (m_recv_offset == 0)
+			m_current_send.swap(m_send_queue.front());
+			m_send_queue.pop_front();
+			m_send_buffer = m_current_send->serialized();
+		} else
 		{
-			// TODO: process request
-
-			m_state = States::RECV_LENGTH;
+			return 0;
 		}
-		break;
 	}
-
-	case States::RECV_PIECE: {
-		m_recv_buffer.resize(m_message_length - 1);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
-		if (m_recv_offset == 0)
-		{
-			// TODO: process piece and signal that it is downloaded
-
-			m_state = States::RECV_LENGTH;
-		}
-		break;
-	}
-
-	case States::RECV_CANCEL: {
-		m_recv_buffer.resize(12);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
-		if (m_recv_offset == 0)
-		{
-			// TODO: process cancel
-
-			m_state = States::RECV_LENGTH;
-		}
-		break;
-	}
-
-	case States::RECV_PORT: {
-		m_recv_buffer.resize(2);
-		m_socket.recv(m_recv_buffer, m_recv_offset);
-		if (m_recv_offset == 0)
-		{
-			// TODO: process port
-
-			m_state = States::RECV_LENGTH;
-		}
-		break;
-	}
-
-	default: {
-		throw std::runtime_error("State value is MAX_STATES");
-	}
-	}
+	m_socket.send(m_send_buffer, m_send_offset);
+	return 1;
 }

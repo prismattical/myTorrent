@@ -31,9 +31,8 @@ void TrackerConnection::connect()
 	m_socket = Socket(m_hostname, m_port, Socket::TCP, Socket::IP_UNSPEC);
 }
 
-int TrackerConnection::send_http(
-	/*const std::string &trk_hostname, */ const std::string &trk_resource,
-	const std::string &info_hash, const std::string &upload_port)
+int TrackerConnection::send_http(const std::string &trk_resource, const std::string &info_hash,
+				 const std::string &upload_port)
 {
 	switch (m_send_state)
 	{
@@ -54,8 +53,8 @@ int TrackerConnection::send_http(
 		m_send_buffer = std::vector<uint8_t>(request_str.begin(), request_str.end());
 
 		m_send_state = SendState::SEND_REQUEST;
-
-		// ! notice no break or return here
+		
+		[[fallthrough]];
 	}
 	case SendState::SEND_REQUEST: {
 		m_socket.send(m_send_buffer, m_send_offset);
@@ -82,7 +81,10 @@ std::optional<std::string> TrackerConnection::recv_http()
 		m_socket.recv(m_recv_buffer, m_recv_offset);
 	} catch (const Socket::ConnectionResetException &cre)
 	{
-		return std::string(m_recv_buffer.begin(), m_recv_buffer.end());
+		std::string ret(m_recv_buffer.begin(), m_recv_buffer.begin() + m_recv_offset);
+		m_recv_offset = 0;
+		m_socket.~Socket();
+		return ret;
 	}
 	return {};
 }
