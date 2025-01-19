@@ -3,6 +3,7 @@
 #include "utils.hpp"
 
 #include <arpa/inet.h>
+#include <array>
 #include <netinet/in.h>
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <cstring>
 #include <fstream>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -145,35 +147,26 @@ void Bitfield::set_message_length(uint32_t length)
 	memcpy(m_data.data(), &length, sizeof length);
 }
 
-Bitfield::Bitfield(std::vector<uint8_t> &&bitfield)
-	: m_data{ std::move(bitfield) }
+uint32_t Bitfield::get_message_length() const
 {
+	uint32_t ret;
+	memcpy(&ret, m_data.data(), sizeof ret);
+	return ntohl(ret);
+}
+
+Bitfield::Bitfield(std::span<const uint8_t> bitfield, const size_t supposed_length)
+	: m_bitfield_length(supposed_length)
+	, m_data{ bitfield.begin(), bitfield.end() }
+{
+	// todo: validate bitfield
 }
 
 Bitfield::Bitfield(const size_t length)
-	: m_data(5 + ((length - 1) / 8 + 1), 0)
+	: m_bitfield_length(length)
+	, m_data(5 + ((length - 1) / 8 + 1), 0)
 {
 	set_message_length(m_data.size() - 4);
 	m_data[4] = 5;
-}
-
-Bitfield::Bitfield(std::ifstream &file, const long long piece_length, const std::string_view hashes)
-	: Bitfield(5 + hashes.length() / 20)
-{
-	set_message_length(m_data.size() - 4);
-	m_data[4] = 5;
-
-	std::vector<unsigned char> buffer(piece_length);
-	for (size_t i = 0; i < hashes.size() / 20; i += 20)
-	{
-		// reinterpret_cast should be safe in this exact situation
-		file.read(reinterpret_cast<char *>(buffer.data()), piece_length);
-		const auto sha1 = utils::calculate_sha1(buffer);
-		const std::string_view hash = hashes.substr(i, 20);
-		bool is_equal = std::equal(sha1.begin(), sha1.end(), hash.begin(), hash.end());
-
-		set_index(i / 20, is_equal);
-	}
 }
 
 void Bitfield::set_index(const size_t index, const bool value) noexcept
@@ -195,6 +188,11 @@ bool Bitfield::get_index(const size_t index) const noexcept
 size_t Bitfield::get_container_size() const
 {
 	return m_data.size();
+}
+
+size_t Bitfield::get_bitfield_length() const
+{
+	return m_bitfield_length;
 }
 
 std::span<const uint8_t> Bitfield::serialized() const &
@@ -254,6 +252,13 @@ std::span<const uint8_t> Request::serialized() const &
 	return m_data;
 }
 
+message::Cancel Request::create_cancel() const
+{
+	std::array<uint8_t, 17> ret = m_data;
+	ret[4] = 8;
+	return { ret };
+}
+
 // Piece
 
 Piece::Piece(std::vector<uint8_t> &&piece)
@@ -287,6 +292,11 @@ uint32_t Piece::get_begin() const
 uint32_t Piece::get_length() const
 {
 	return m_data.size() - 13;
+}
+
+[[nodiscard]] std::span<const uint8_t> Piece::get_data() const
+{
+	return { m_data.data() + 13, m_data.size() - 13 };
 }
 
 std::span<const uint8_t> Piece::serialized() const &
@@ -343,6 +353,13 @@ uint32_t Cancel::get_length() const
 std::span<const uint8_t> Cancel::serialized() const &
 {
 	return m_data;
+}
+
+message::Request Cancel::create_request() const
+{
+	std::array<uint8_t, 17> ret = m_data;
+	ret[4] = 6;
+	return { ret };
 }
 
 // Port

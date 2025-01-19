@@ -23,6 +23,7 @@ private:
 					     "BitTorrent protocol" };
 
 public:
+	Handshake() = default;
 	Handshake(std::span<const uint8_t> info_hash, std::span<const uint8_t> peer_id);
 	Handshake(std::span<const uint8_t> handshake);
 
@@ -102,15 +103,24 @@ public:
 
 struct Bitfield final : public Message {
 private:
+	/**
+	 * @brief an exact number of fields in bitfield
+	 *
+	 * This number is equal to number of SHA1 hashes in a torrent file and
+	 * to number of pieces in a given download. If it is not a multiple of 8,
+	 * then all spare fields must be set to 0
+	 */
+	size_t m_bitfield_length;
 	std::vector<uint8_t> m_data;
 
 	void set_message_length(uint32_t length);
+	[[nodiscard]] uint32_t get_message_length() const;
 
 public:
 	Bitfield() = default;
 
 	// creates bitfield from received message
-	Bitfield(std::vector<uint8_t> &&bitfield);
+	Bitfield(std::span<const uint8_t> bitfield, size_t supposed_length);
 
 	/**
 	* @brief Create empty bitfield ctor 
@@ -118,23 +128,29 @@ public:
 	* @param length an amount of pieces
 	*/
 	Bitfield(size_t length);
-	/**
-	 * @brief Check file and create bitfield ctor
-	 */
-	Bitfield(std::ifstream &file, long long piece_length, std::string_view hashes);
 
 	void set_index(size_t index, bool value) noexcept;
 	[[nodiscard]] bool get_index(size_t index) const noexcept;
+	/**
+	 * @brief Get the size of underlying container (in bytes)
+	 */
 	[[nodiscard]] size_t get_container_size() const;
+	/**
+	 * @brief Get the bitfield length (in bits)
+	 */
+	[[nodiscard]] size_t get_bitfield_length() const;
 
 	[[nodiscard]] std::span<const uint8_t> serialized() const & override;
 };
+
+struct Cancel;
 
 struct Request final : public Message {
 private:
 	std::array<uint8_t, 17> m_data{ 0, 0, 0, 13, 6 };
 
 public:
+	Request() = default;
 	Request(uint32_t index, uint32_t begin, uint32_t length);
 	Request(std::span<const uint8_t> request);
 
@@ -146,6 +162,7 @@ public:
 	[[nodiscard]] uint32_t get_length() const;
 
 	[[nodiscard]] std::span<const uint8_t> serialized() const & override;
+	[[nodiscard]] message::Cancel create_cancel() const;
 };
 
 struct Piece final : public Message {
@@ -170,6 +187,7 @@ public:
 	void set_begin(uint32_t begin);
 	[[nodiscard]] uint32_t get_begin() const;
 	[[nodiscard]] uint32_t get_length() const;
+	[[nodiscard]] std::span<const uint8_t> get_data() const;
 
 	[[nodiscard]] std::span<const uint8_t> serialized() const & override;
 };
@@ -179,6 +197,7 @@ private:
 	std::array<uint8_t, 17> m_data{ 0, 0, 0, 13, 8 };
 
 public:
+	Cancel() = default;
 	Cancel(uint32_t index, uint32_t begin, uint32_t length);
 	Cancel(std::span<const uint8_t> cancel);
 
@@ -190,6 +209,7 @@ public:
 	[[nodiscard]] uint32_t get_length() const;
 
 	[[nodiscard]] std::span<const uint8_t> serialized() const & override;
+	[[nodiscard]] message::Request create_request() const;
 };
 
 struct Port final : public Message {

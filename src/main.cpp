@@ -1,14 +1,16 @@
 #include "config.hpp"
 #include "download.hpp"
 
+#include <memory>
+
 int main()
 {
 	config::load_configs();
-	config::create_cache_dir();
+
 	config::create_downloads_dir();
 
-	Download test_dl("torrents/debian.torrent");
-	test_dl.download();
+	auto test_dl = std::make_unique<Download>("./torrents/debian.torrent");
+	test_dl->start();
 
 	return 0;
 }

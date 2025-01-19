@@ -1,14 +1,23 @@
 #pragma once
 
-#include <cstdint>
-#include <fstream>
-#include <vector>
+#include "peer_message.hpp"
 
-class Piece {
-	std::vector<uint8_t> m_piece;
+#include <vector>
+#include <string>
+
+struct ReceivedPiece {
+	friend class FileHandler;
 
 public:
-	Piece() = default;
-	Piece(long length);
-	Piece(std::ifstream &file, long index, long length);
+	std::vector<message::Piece> m_pieces;
+
+	ReceivedPiece() = default;
+	ReceivedPiece(ReceivedPiece &other) = delete;
+	ReceivedPiece &operator=(ReceivedPiece &other) = delete;
+
+	void add_block(message::Piece &&block);
+	void clear();
+	[[nodiscard]] size_t get_index() const;
+
+	[[nodiscard]] std::string compute_sha1() const;
 };

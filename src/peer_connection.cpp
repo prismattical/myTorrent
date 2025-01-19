@@ -4,130 +4,47 @@
 #include "socket.hpp"
 
 #include <arpa/inet.h>
+#include <chrono>
 #include <netinet/in.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include <variant>
-
-bool PeerConnection::get_socket_status() const
-{
-	return m_socket.connected();
-}
+#include <vector>
 
 int PeerConnection::get_socket_fd() const
 {
 	return m_socket.get_fd();
 }
 
-void PeerConnection::proceed_message()
+PeerConnection::PeerConnection(const std::string &ip, const std::string &port,
+			       const message::Handshake &handshake,
+			       const message::Bitfield &bitfield)
+	: m_socket{ ip, port, Socket::IP_UNSPEC }
+	, peer_bitfield(bitfield.get_bitfield_length())
 {
-	switch (m_recv_buffer[4] /*id of the message*/)
-	{
-	case 0:
-		// no need to construct this message
-		m_am_choking = true;
-		// should be return with notification after choking happens
-		break;
-	case 1:
-		// no need to construct this message
-		m_am_choking = false;
-		// should be return with notification after unchoking happens
-		break;
-	case 2:
-		// no need to construct this message
-		m_peer_interested = true;
-		break;
-	case 3:
-		// no need to construct this message
-		m_peer_interested = false;
-		break;
-	case 4: {
-		auto have = message::Have({ m_recv_buffer.data(), 9 });
-		m_peer_bitfield.set_index(have.get_index(), true);
-		// should notify that new pieces may be available
-		break;
-	}
-	case 5: {
-		// TODO fix bug
-		m_peer_bitfield = message::Bitfield(std::move(m_recv_buffer));
-		m_recv_buffer.resize(m_default_recv_buffer_length);
-		// should notify that new pieces may be available
-		break;
-	}
-	case 6: {
-		auto request = message::Request({ m_recv_buffer.data(), 17 });
-		// should notify that piece was requested
-		break;
-	}
-	case 7: {
-		auto piece = message::Piece(std::move(m_recv_buffer));
-		m_recv_buffer.resize(m_default_recv_buffer_length);
-		// should notify and move away the piece
-		break;
-	}
-	case 8: {
-		auto cancel = message::Cancel({ m_recv_buffer.data(), 17 });
-		break;
-	}
-	case 9:
-		// do nothing because not implemented
-		break;
-	default:
-		throw std::runtime_error("Invalid message id value");
-	}
+	m_send_queue.emplace_back(std::make_unique<message::Handshake>(handshake));
+	m_send_queue.emplace_back(std::make_unique<message::Bitfield>(bitfield));
 }
 
-PeerConnection::PeerConnection(
-	const std::string &ip, const std::string &port, std::span<const uint8_t> info_hash_binary,
-	std::span<const uint8_t> peer_id,
-	std::variant<std::reference_wrapper<const message::Bitfield>, size_t> bitfield_or_length)
-	: m_socket{ ip, port, Socket::TCP, Socket::IP_UNSPEC }
-	, m_info_hash_binary{ info_hash_binary }
-{
-	m_send_queue.emplace_back(std::make_unique<message::Handshake>(info_hash_binary, peer_id));
-
-	using message::Bitfield;
-	if (std::holds_alternative<std::reference_wrapper<const Bitfield>>(bitfield_or_length))
-	{
-		const Bitfield &bf =
-			std::get<std::reference_wrapper<const Bitfield>>(bitfield_or_length).get();
-
-		m_send_queue.emplace_back(std::make_unique<Bitfield>(bf));
-
-		m_default_recv_buffer_length = bf.get_container_size();
-	} else
-	{
-		m_default_recv_buffer_length = std::get<size_t>(bitfield_or_length);
-	}
-
-	// 68 is the size of the handshake message
-	m_default_recv_buffer_length = std::max<size_t>(m_default_recv_buffer_length, 68);
-}
-
-int PeerConnection::proceed_recv()
+int PeerConnection::recv()
 {
 	switch (m_state)
 	{
 	case States::HANDSHAKE:
-		m_socket.recv({ m_recv_buffer.data(), 68 }, m_recv_offset);
+		static constexpr size_t hs_len = 68;
+		m_socket.recv({ m_recv_buffer.data(), hs_len }, m_recv_offset);
 		if (m_recv_offset == 0)
 		{
-			message::Handshake hs({ m_recv_buffer.data(), 68 });
-			if (hs.get_pstrlen()[0] != 19 ||
-			    memcmp(hs.get_pstr().data(), "BitTorrent protocol", 19) != 0 ||
-			    memcmp(hs.get_info_hash().data(), m_info_hash_binary.data(), 20) != 0)
-			{
-				throw std::runtime_error("Invalid peer handshake");
-			}
 			m_state = States::LENGTH;
+			// setting it like this allows to simplify implementation of view_recv_message()
+			m_message_length = hs_len - 4;
+			return 0;
 		}
 		break;
 	case States::LENGTH:
@@ -138,44 +55,172 @@ int PeerConnection::proceed_recv()
 			m_message_length = ntohl(m_message_length);
 			if (m_message_length == 0)
 			{
-				// proceed KeepAlive message
-				break;
-			}
-			if (m_message_length > m_default_recv_buffer_length)
-			{
-				m_default_recv_buffer_length = m_message_length;
-				m_recv_buffer.resize(m_default_recv_buffer_length);
+				// KeepAlive message received
+				return 0;
 			}
 			m_state = States::MESSAGE;
+			// this can save a spare call to poll()
+			[[fallthrough]];
+		} else
+		{
+			break;
 		}
-		[[fallthrough]]; // this can save a spare call to poll()
 	case States::MESSAGE:
 		m_socket.recv({ m_recv_buffer.data() + 4, m_message_length }, m_recv_offset);
 		if (m_recv_offset == 0)
 		{
-			proceed_message();
 			m_state = States::LENGTH;
+			return 0;
 		}
 		break;
 	default:
 		throw std::runtime_error("Invalid state value");
 	}
+	return 1;
 }
 
-int PeerConnection::proceed_send()
+int PeerConnection::send()
 {
+	m_socket.send(m_send_queue.front()->serialized(), m_send_offset);
 	if (m_send_offset == 0)
 	{
-		if (!m_send_queue.empty())
-		{
-			m_current_send.swap(m_send_queue.front());
-			m_send_queue.pop_front();
-			m_send_buffer = m_current_send->serialized();
-		} else
-		{
-			return 0;
-		}
+		m_send_queue.pop_front();
+		return 0;
 	}
-	m_socket.send(m_send_buffer, m_send_offset);
 	return 1;
+}
+
+bool PeerConnection::should_wait_for_send() const
+{
+	return !m_send_queue.empty();
+}
+
+std::span<const uint8_t> PeerConnection::view_recv_message() const
+{
+	return { m_recv_buffer.data(), 4 + m_message_length };
+}
+
+std::vector<uint8_t> PeerConnection::get_recv_message()
+{
+	auto ret = std::move(m_recv_buffer);
+	m_recv_buffer = std::vector<uint8_t>(recv_buffer_size);
+	return ret;
+}
+
+bool PeerConnection::update_time()
+{
+	using namespace std::chrono;
+	auto curr_tp = steady_clock::now();
+	if (duration_cast<seconds>(m_tp - curr_tp).count() > keepalive_timeout)
+	{
+		m_send_queue.push_back(std::make_unique<message::KeepAlive>());
+		m_tp = curr_tp;
+		return true;
+	}
+	return false;
+}
+
+void PeerConnection::send_message(std::unique_ptr<message::Message> message)
+{
+	m_send_queue.emplace_back(std::move(message));
+}
+
+void PeerConnection::create_requests_for_piece(size_t index, size_t piece_size)
+{
+	m_rq_current = 0;
+
+	m_request_queue.resize((piece_size + max_block_size - 1) / max_block_size);
+
+	for (size_t i = 0; i < m_request_queue.size(); ++i)
+	{
+		uint32_t begin = i * max_block_size;
+		m_request_queue[i] = { static_cast<uint32_t>(index), begin,
+				       std::min<uint32_t>(piece_size - begin, max_block_size) };
+	}
+}
+void PeerConnection::send_initial_requests()
+{
+	for (size_t i = 0; i < max_pending && i < m_request_queue.size(); ++i)
+	{
+		m_send_queue.emplace_back(
+			std::make_unique<message::Request>(m_request_queue.at(i)));
+	}
+}
+
+int PeerConnection::send_requests()
+{
+	if (m_rq_current + max_pending < m_request_queue.size())
+	{
+		m_send_queue.emplace_back(std::make_unique<message::Request>(
+			m_request_queue.at(m_rq_current + max_pending)));
+	}
+
+	++m_rq_current;
+
+	if (m_rq_current == m_request_queue.size())
+	{
+		return 1;
+	}
+
+	return 0;
+}
+
+void PeerConnection::cancel_requests_by_cancel(size_t index)
+{
+	if (!m_request_queue.empty() && index == m_request_queue[0].get_index())
+	{
+		for (size_t i = m_rq_current;
+		     i < m_rq_current + max_pending - 1 && i < m_request_queue.size(); ++i)
+		{
+			m_send_queue.emplace_back(std::make_unique<message::Cancel>(
+				m_request_queue[i].create_cancel()));
+		}
+		m_request_queue.clear();
+	}
+}
+
+void PeerConnection::cancel_requests_on_choke()
+{
+	m_request_queue.clear();
+}
+
+bool PeerConnection::is_downloading() const
+{
+	return !m_request_queue.empty();
+}
+
+void PeerConnection::send_choke()
+{
+	if (!m_peer_choking)
+	{
+		send_message(std::make_unique<message::Choke>());
+		m_peer_choking = true;
+	}
+}
+
+void PeerConnection::send_unchoke()
+{
+	if (m_peer_choking)
+	{
+		send_message(std::make_unique<message::Unchoke>());
+		m_peer_choking = false;
+	}
+}
+
+void PeerConnection::send_interested()
+{
+	if (!m_am_interested)
+	{
+		send_message(std::make_unique<message::Interested>());
+		m_am_interested = true;
+	}
+}
+
+void PeerConnection::send_notinterested()
+{
+	if (m_am_interested)
+	{
+		send_message(std::make_unique<message::NotInterested>());
+		m_am_interested = false;
+	}
 }

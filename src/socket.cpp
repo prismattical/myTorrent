@@ -18,7 +18,6 @@
 #include <string>
 #include <tuple>
 #include <utility>
-#include <vector>
 
 // error message behavior is similar to C perror() function
 Socket::ConnectionResetException::ConnectionResetException(const std::string &prefix)
@@ -67,19 +66,6 @@ uint16_t get_port(const sockaddr *sa)
 	}
 }
 
-int protocol_to_int(const Socket::Protocol protocol) noexcept
-{
-	switch (protocol)
-	{
-	case Socket::TCP:
-		return SOCK_STREAM;
-	case Socket::UDP:
-		return SOCK_DGRAM;
-	default:
-		return -1;
-	}
-}
-
 int ip_version_to_int(const Socket::IPVersion ip_version) noexcept
 {
 	switch (ip_version)
@@ -95,8 +81,7 @@ int ip_version_to_int(const Socket::IPVersion ip_version) noexcept
 	}
 }
 
-Socket::Socket(const std::string &hostname, const std::string &port, const Protocol protocol,
-	       const IPVersion ip_version)
+Socket::Socket(const std::string &hostname, const std::string &port, const IPVersion ip_version)
 {
 	int rc;
 	struct addrinfo hints;
@@ -104,7 +89,7 @@ Socket::Socket(const std::string &hostname, const std::string &port, const Proto
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = ip_version_to_int(ip_version);
-	hints.ai_socktype = protocol_to_int(protocol);
+	hints.ai_socktype = SOCK_STREAM;
 
 	rc = getaddrinfo(hostname.c_str(), port.c_str(), &hints, &res_temp);
 
@@ -116,6 +101,8 @@ Socket::Socket(const std::string &hostname, const std::string &port, const Proto
 	const std::unique_ptr<struct addrinfo, decltype(&freeaddrinfo)> res(res_temp, freeaddrinfo);
 
 	struct addrinfo *curr;
+	// better version would be to have a log file and write all error messages inside of it
+	// because error handling like this can potentially miss some error messages
 	std::string stored_message;
 	for (curr = res.get(); curr != nullptr; curr = curr->ai_next)
 	{
@@ -136,11 +123,7 @@ Socket::Socket(const std::string &hostname, const std::string &port, const Proto
 		}
 
 		rc = connect(m_socket, curr->ai_addr, curr->ai_addrlen);
-		if (rc == 0)
-		{
-			m_connected = true;
-			break;
-		}
+
 		if (rc == -1 && errno != EINPROGRESS)
 		{
 			stored_message = std::string("connect(): ") + strerror(errno);
@@ -153,19 +136,19 @@ Socket::Socket(const std::string &hostname, const std::string &port, const Proto
 
 	if (curr == nullptr)
 	{
+		m_socket = -1;
 		throw std::runtime_error(std::string("Socket(): ") + stored_message);
 	}
 
 	const std::string str = ::ntop(curr->ai_addr);
 
-	std::clog << "Connected to " << hostname << " (" << str << ":" << port << ")" << '\n';
+	// std::clog << "Connected to " << hostname << " (" << str << ":" << port << ")" << '\n';
 }
 
 Socket::Socket(Socket &&other) noexcept
 {
 	this->~Socket();
 	m_socket = std::exchange(other.m_socket, -1);
-	m_connected = other.m_connected;
 }
 
 Socket &Socket::operator=(Socket &&other) noexcept
@@ -174,7 +157,6 @@ Socket &Socket::operator=(Socket &&other) noexcept
 	{
 		this->~Socket();
 		m_socket = std::exchange(other.m_socket, -1);
-		m_connected = other.m_connected;
 	}
 
 	return *this;
@@ -193,11 +175,9 @@ void Socket::validate_connect() const
 	}
 	if (error != 0)
 	{
-		// TODO: test if error actually represent valid errno
 		throw std::runtime_error(std::string("validate_connect(): connect(): ") +
 					 strerror(error));
 	}
-	m_connected = true;
 }
 
 void Socket::send(const std::span<const uint8_t> buffer, size_t &offset) const
@@ -273,11 +253,6 @@ void Socket::recv(const std::span<uint8_t> buffer, size_t &offset) const
 	offset = 0;
 }
 
-bool Socket::connected() const
-{
-	return m_connected;
-}
-
 int Socket::get_fd() const
 {
 	return m_socket;
@@ -286,6 +261,7 @@ int Socket::get_fd() const
 Socket::~Socket()
 {
 	close(m_socket);
+	m_socket = -1;
 }
 
 std::tuple<std::string, std::string> Socket::get_peer_ip_and_port() const

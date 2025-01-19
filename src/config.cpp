@@ -21,6 +21,11 @@ void load_configs()
 	g_path_to_app_root.remove_filename();
 
 	std::filesystem::path path_to_config = g_path_to_app_root / "configs.conf";
+	if (!std::filesystem::exists(path_to_config))
+	{
+		return;
+	}
+	
 	std::ifstream file(path_to_config);
 
 	for (std::string line; std::getline(file, line);)

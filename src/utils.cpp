@@ -11,113 +11,73 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
-#include <vector>
 
 namespace utils
 {
 
-std::vector<unsigned char> string_to_sha1(const std::string &input)
+std::array<uint8_t, sha1_length> compute_sha1(std::span<const uint8_t> input)
+
 {
-	EVP_MD_CTX *ctx = EVP_MD_CTX_create();
-	EVP_MD_CTX_init(ctx);
-	EVP_DigestInit_ex(ctx, EVP_sha1(), nullptr);
+	std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> ctx(EVP_MD_CTX_new(),
+								    EVP_MD_CTX_free);
+	if (ctx == nullptr)
+	{
+		throw std::runtime_error("EVP_MD_CTX_new() has failed");
+	}
+	if (EVP_DigestInit_ex2(ctx.get(), EVP_sha1(), nullptr) == 0)
+	{
+		throw std::runtime_error("EVP_DigestInit_ex2() has failed");
+	}
+	if (EVP_DigestUpdate(ctx.get(), input.data(), input.size()) == 0)
+	{
+		throw std::runtime_error("EVP_DigestUpdate() has failed");
+	}
+	std::array<uint8_t, sha1_length> hash;
 
-	EVP_DigestUpdate(ctx, input.data(), input.size());
-
-	const unsigned int digest_size = EVP_MD_size(EVP_sha1());
-	std::vector<unsigned char> hash(digest_size);
-
-	unsigned int final_size;
-	EVP_DigestFinal_ex(ctx, hash.data(), &final_size);
-
-	EVP_MD_CTX_destroy(ctx);
-
-	hash.resize(final_size);
+	if (EVP_DigestFinal_ex(ctx.get(), hash.data(), nullptr) == 0)
+	{
+		throw std::runtime_error("EVP_DigestFinal_ex() has failed");
+	}
 
 	return hash;
 }
 
-std::string calculate_sha1(const std::vector<uint8_t> &piece)
-{
-	EVP_MD_CTX *ctx = EVP_MD_CTX_create();
-	EVP_MD_CTX_init(ctx);
-	EVP_DigestInit_ex(ctx, EVP_sha1(), nullptr);
-
-	EVP_DigestUpdate(ctx, piece.data(), piece.size());
-
-	const unsigned int digest_size = EVP_MD_size(EVP_sha1());
-	std::vector<unsigned char> hash(digest_size);
-
-	unsigned int final_size;
-	EVP_DigestFinal_ex(ctx, hash.data(), &final_size);
-
-	EVP_MD_CTX_destroy(ctx);
-
-	hash.resize(final_size);
-
-	return std::string{ hash.begin(), hash.end() };
-}
-
-std::string sha1_to_url(const std::vector<unsigned char> &input)
+std::string convert_to_url(std::span<const uint8_t> input)
 {
 	std::string ret;
 	for (const unsigned char ch : input)
 	{
 		if (isalnum(ch) != 0 || ch == '-' || ch == '_' || ch == '.' || ch == '~')
 		{
+			// compiler warns about narrowing conversion, but it can't happen
+			// because if we take this branch of if statement, ch < 128
 			ret += ch;
 		} else
 		{
 			std::stringstream ss;
 			ss << '%' << std::setw(2) << std::setfill('0') << std::hex
-			   << (unsigned int)ch;
+			   << static_cast<unsigned int>(ch);
 			ret.append(ss.str());
 		}
 	}
 	return ret;
 }
 
-std::tuple<std::string, std::string, std::string> parse_url(const std::string &url)
+std::tuple<std::string, std::string, std::string> parse_announce_url(const std::string &url)
 {
-	const std::regex pattern(R"(^([a-z]+)://([^/]*)(/.*)?)");
+	const std::regex regex(R"(^([a-z]+)://([^:]+):(\d+)?(/.*)?$)");
 
-	try
+	std::smatch match;
+	if (!std::regex_match(url, match, regex))
 	{
-		std::smatch match;
-		if (std::regex_search(url, match, pattern))
-		{
-			const std::string protocol = match[1].str();
-			const std::string domain = match[2].str();
-			const std::string path = match[3].str().empty() ? "/" : match[3].str();
-			return std::make_tuple(protocol, domain, path);
-		}
-		throw std::runtime_error("Invalid URL format");
-
-	} catch (const std::regex_error &e)
-	{
-		throw std::runtime_error("parse_url(): " + std::string(e.what()));
+		throw std::runtime_error("parse_url(): regex_match() error");
 	}
-}
 
-std::tuple<std::string, std::string> parse_endpoint(const std::string &endpoint)
-{
-	const std::regex pattern("([^:]+):(\\d+)");
+	std::string protocol = match[1].str();
+	std::string endpoint = match[2].str();
+	std::string port = match.size() > 3 ? match[3].str() : "6969";
 
-	try
-	{
-		std::smatch match;
-		if (std::regex_search(endpoint, match, pattern))
-		{
-			return std::make_tuple(match[1].str(), match[2].str());
-		}
-		return std::make_tuple(endpoint, "6969");
-
-		throw std::runtime_error("Invalid endpoint format");
-
-	} catch (const std::regex_error &e)
-	{
-		throw std::runtime_error("parse_endpoint(): " + std::string(e.what()));
-	}
+	return std::make_tuple(protocol, endpoint, port);
 }
 
 std::tuple<int, std::string> parse_http_response(const std::string &responce)
@@ -163,7 +123,7 @@ std::tuple<int, std::string> parse_http_response(const std::string &responce)
 	return { return_code, body };
 }
 
-std::string generate_random_connection_id()
+std::array<uint8_t, id_length> generate_connection_id()
 {
 	std::random_device rd;
 	std::mt19937 mt(rd());
@@ -173,21 +133,21 @@ std::string generate_random_connection_id()
 
 	std::uniform_int_distribution<int> dist_choice(0, 2);
 
-	std::string ret /* = "-mT0001-"*/;
+	std::array<uint8_t, id_length> ret;
 
-	for (int i = 0; i < 20; ++i)
+	for (unsigned char &ch : ret)
 	{
 		const int c = dist_choice(mt);
 		switch (c)
 		{
 		case 0:
-			ret += dist_num(mt);
+			ch = dist_num(mt);
 			break;
 		case 1:
-			ret += dist_low(mt);
+			ch = dist_low(mt);
 			break;
 		case 2:
-			ret += dist_up(mt);
+			ch = dist_up(mt);
 			break;
 		default:
 			break;

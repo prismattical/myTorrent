@@ -3,15 +3,19 @@
 #include "peer_message.hpp"
 #include "socket.hpp"
 
+#include <algorithm>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <functional>
 #include <memory>
-#include <variant>
+#include <span>
 #include <vector>
 
 class PeerConnection {
-	static constexpr int m_max_block_size = 16384;
+	static constexpr size_t max_block_size = 16384;
+	static constexpr size_t recv_buffer_size = max_block_size + 13;
+	static constexpr int keepalive_timeout = 115; // in seconds
 
 	enum class States {
 		HANDSHAKE,
@@ -23,40 +27,64 @@ class PeerConnection {
 
 	Socket m_socket;
 
-	bool m_am_choking = true;
-	bool m_peer_interested = false;
-
-	bool m_peer_choking = true;
-	bool m_am_interested = false;
-
 	States m_state = States::HANDSHAKE;
 
-	/*const*/ size_t m_default_recv_buffer_length;
-	std::vector<uint8_t> m_recv_buffer;
+	std::vector<uint8_t> m_recv_buffer = std::vector<uint8_t>(recv_buffer_size);
 	size_t m_recv_offset = 0;
+	uint32_t m_message_length = 0;
 
 	std::deque<std::unique_ptr<message::Message>> m_send_queue;
-	std::unique_ptr<message::Message> m_current_send;
-	std::span<const uint8_t> m_send_buffer;
 	size_t m_send_offset = 0;
 
-	uint32_t m_message_length;
-	// view of memory owned by Download object
-	/*const*/ std::span<const uint8_t> m_info_hash_binary;
-	message::Bitfield m_peer_bitfield;
+	std::chrono::steady_clock::time_point m_tp = std::chrono::steady_clock::now();
 
-	void proceed_message();
+	static constexpr size_t max_pending = 4;
+
+	std::vector<message::Request> m_request_queue;
+
+	void send_message(std::unique_ptr<message::Message> message);
+
+	bool m_am_interested = false;
+	bool m_peer_choking = true;
 
 public:
+	size_t m_rq_current = 0; // rq stands for request queue
+
 	PeerConnection() = default;
 	PeerConnection(const std::string &ip, const std::string &port,
-		       std::span<const uint8_t> info_hash_binary, std::span<const uint8_t> peer_id,
-		       std::variant<std::reference_wrapper<const message::Bitfield>, size_t>
-			       bitfield_or_length);
+		       const message::Handshake &handshake, const message::Bitfield &bitfield);
 
-	int proceed_recv();
-	int proceed_send();
+	message::Bitfield peer_bitfield;
+	bool am_choking = true;
+	bool peer_interested = false;
 
-	[[nodiscard]] bool get_socket_status() const;
+	void send_choke();
+	void send_unchoke();
+	void send_notinterested();
+	void send_interested();
+
+	// for piece like big piece, not message::Piece
+	// the fact that these two things have the same name is so damn confusing
+	void create_requests_for_piece(size_t index, size_t piece_size);
+	// must be called repeatedly after each recv() of a message::Piece
+	// if it returns not 0, it means that that message::Piece was the last part
+	// of a big piece. Otherwise it returns 0
+	int send_requests();
+	void send_initial_requests();
+	// during endgame should be called by all peers if piece was already downloaded
+	// by someone else
+	void cancel_requests_by_cancel(size_t index);
+	void cancel_requests_on_choke();
+
+	[[nodiscard]] bool is_downloading() const;
+
+	[[nodiscard]] int send();
+	[[nodiscard]] int recv();
 	[[nodiscard]] int get_socket_fd() const;
+	[[nodiscard]] bool should_wait_for_send() const;
+
+	[[nodiscard]] std::span<const uint8_t> view_recv_message() const;
+	[[nodiscard]] std::vector<uint8_t> get_recv_message();
+
+	bool update_time();
 };

@@ -1,68 +1,89 @@
 #pragma once
 
+#include "announce_list.hpp"
+#include "download_strategy.hpp"
+#include "file_handler.hpp"
+#include "metainfo_file.hpp"
 #include "peer_connection.hpp"
 #include "peer_message.hpp"
+#include "piece.hpp"
 #include "tracker_connection.hpp"
 #include "utils.hpp"
 
-#include <poll.h>
-
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <poll.h>
+#include <stdexcept>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <vector>
 
 class Download {
-	// source string for all views
-	const std::string m_torrent_string;
+	std::array<uint8_t, utils::id_length> m_connection_id = utils::generate_connection_id();
 
-	std::string m_info_hash;
-	long long m_piece_length;
-	std::string_view m_pieces;
-	std::string m_filename;
-	long long m_file_length;
-	std::vector<uint8_t> m_info_hash_binary;
+	MetainfoFile m_metainfo;
+	AnnounceList m_announce_list;
+	std::unique_ptr<DownloadStrategy> m_dl_strategy;
 
-
+	message::Handshake m_handshake;
 	message::Bitfield m_bitfield;
 
-	// socket management
+	std::vector<FileHandler> m_dl_layout;
+	std::vector<ReceivedPiece> m_pieces;
 
-	static constexpr int m_timeout = 999999;
-	static constexpr int m_max_peers = 50;
+	long long m_last_piece_size;
 
-	std::vector<std::vector<std::string>> m_announce_urls;
-	size_t m_last_tracker_tier;
-	size_t m_last_tracker_tier_index;
-	TrackerConnection m_tracker;
+	static constexpr int m_max_peers = 10;
 
-	std::array<PeerConnection, m_max_peers> m_peers;
+	static constexpr long long m_timeout_on_failure = 300;
 
-	// the last one pollfd is tracker's pollfd
-	std::array<struct pollfd, m_max_peers + 1> m_fds{ []() constexpr {
-		std::array<struct pollfd, m_max_peers + 1> ret{};
-		for (auto &pollfd : ret)
-		{
-			pollfd = { -1, 0, 0 };
-		}
-		return ret;
-	}() };
+	std::vector<PeerConnection> m_peer_connections{ m_max_peers };
+	TrackerConnection m_tracker_connection;
+	// m_fds.back() is tracker pollfd
+	std::vector<struct pollfd> m_fds{ m_max_peers + 1, { -1, 0, 0 } };
 
-	std::string m_connection_id = utils::generate_random_connection_id();
+	// general methods
 
-	void connect_to_tracker();
+	void create_download_layout();
+	void check_layout();
+	void preallocate_files();
+	[[nodiscard]] size_t number_of_pieces() const;
+	static void copy_metainfo_file_to_cache(const std::string &path_to_torrent);
+
+	// async methods
+
+	[[nodiscard]] bool has_peers_connected() const;
+
+	static short connection_events(const TrackerConnection &connection);
+	static short connection_events(const PeerConnection &connection);
+
+	static std::tuple<std::vector<std::pair<std::string, std::string>>, long long>
+	parse_tracker_response(const std::string &response);
+
+	void peer_callback(size_t index);
+	void tracker_callback();
+
+	void proceed_peer(size_t index);
+	void proceed_tracker();
+
 	void
 	connect_to_new_peers(const std::vector<std::pair<std::string, std::string>> &peer_addrs);
+	void connect_to_tracker();
 
-	// return a vector of pairs <ip, port> that belong to possible peers
-	// and an interval to wait between regular requests
-	static std::tuple<std::vector<std::pair<std::string, std::string>>, long long>
-	parse_tracker_response_http(const std::string &response);
+	void update_time_peer(size_t index);
+	void update_time_tracker();
+
+	void poll();
 
 public:
 	Download(const std::string &path_to_torrent);
 
-	void download();
+	void start();
+
+	class AllTrackersNotRespondingError : public std::runtime_error {
+	public:
+		AllTrackersNotRespondingError(const std::string &msg);
+	};
 };
