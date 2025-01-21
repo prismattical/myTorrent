@@ -7,7 +7,7 @@
 
 // InfoDict ----------------------------------------------------------------------------
 
-std::optional<std::string> decode_optional_string(bencode::data source, const std::string &key)
+std::optional<std::string> decode_optional_string(bencode::data &source, const std::string &key)
 {
 	try
 	{
@@ -18,7 +18,7 @@ std::optional<std::string> decode_optional_string(bencode::data source, const st
 	}
 }
 
-std::optional<long long> decode_optional_int(bencode::data source, const std::string &key)
+std::optional<long long> decode_optional_int(bencode::data &source, const std::string &key)
 {
 	try
 	{
@@ -29,7 +29,7 @@ std::optional<long long> decode_optional_int(bencode::data source, const std::st
 	}
 }
 
-std::optional<bencode::list> decode_optional_list_view(bencode::data source, const std::string &key)
+std::optional<bencode::list> decode_optional_list_view(bencode::data &source, const std::string &key)
 {
 	try
 	{
