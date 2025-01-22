@@ -61,7 +61,8 @@ int PeerConnection::recv()
 			m_state = States::MESSAGE;
 			// this can save a spare call to poll()
 			[[fallthrough]];
-		} else
+		}
+		else
 		{
 			break;
 		}

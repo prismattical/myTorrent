@@ -174,7 +174,8 @@ void Bitfield::set_index(const size_t index, const bool value) noexcept
 	if (value)
 	{
 		m_data[5 + index / 8] |= static_cast<uint8_t>(1) << (7 - index % 8);
-	} else
+	}
+	else
 	{
 		m_data[5 + index / 8] &= ~(static_cast<uint8_t>(1) << (7 - index % 8));
 	}

@@ -52,7 +52,8 @@ std::string convert_to_url(std::span<const uint8_t> input)
 			// compiler warns about narrowing conversion, but it can't happen
 			// because if we take this branch of if statement, ch < 128
 			ret += ch;
-		} else
+		}
+		else
 		{
 			std::stringstream ss;
 			ss << '%' << std::setw(2) << std::setfill('0') << std::hex

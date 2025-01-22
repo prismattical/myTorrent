@@ -105,7 +105,8 @@ void Download::check_layout()
 			{
 				std::cout << "already downloaded";
 				m_bitfield.set_index(i, true);
-			} else
+			}
+			else
 			{
 				std::cout << "not yet downloaded";
 			}
@@ -116,7 +117,8 @@ void Download::check_layout()
 			{
 				++j;
 			}
-		} else
+		}
+		else
 		{
 			++j;
 		}
@@ -233,7 +235,8 @@ void Download::tracker_callback()
 				throw std::runtime_error(
 					"Download is stalled due to tracker error");
 			}
-		} else
+		}
+		else
 		{
 			// if it was not the last tracker, then we close the connection and set timeout to 1 sec
 			// after 1 second the timeout will expire and function connect_to_tracker will be called again
@@ -266,13 +269,14 @@ void Download::peer_callback(const size_t index)
 	{
 		//  KeepAlive
 		std::clog << "Received KeepAlive from peer" << '\n';
-
-	} else if (view.size() == 68)
+	}
+	else if (view.size() == 68)
 	{
 		// Handshake
 		std::clog << "Received Handshake from peer" << '\n';
 		// todo: handle
-	} else
+	}
+	else
 	{
 		switch (view[4])
 		{
@@ -391,7 +395,8 @@ void Download::peer_callback(const size_t index)
 					m_pieces[ind].clear();
 					std::clog << "Piece " << ind
 						  << " discarded due to wrong SHA1" << '\n';
-				} else // on successful SHA1 check
+				}
+				else // on successful SHA1 check
 				{
 					// write piece
 					for (const auto &fh : m_dl_layout)
@@ -416,7 +421,8 @@ void Download::peer_callback(const size_t index)
 				{
 					request_new_pieces();
 				}
-			} else
+			}
+			else
 			{
 				// probably do nothing idk
 			}
@@ -577,8 +583,8 @@ void Download::poll()
 			}
 			update_time_peer(i);
 		}
-
-	} else if (rc == 0) // on timeout
+	}
+	else if (rc == 0) // on timeout
 	{
 		update_time_tracker();
 
@@ -586,8 +592,8 @@ void Download::poll()
 		{
 			update_time_peer(i);
 		}
-
-	} else
+	}
+	else
 	{
 		// on error
 		throw std::runtime_error(std::string("poll(): ") + strerror(errno));
@@ -656,7 +662,8 @@ Download::parse_tracker_response(const std::string &response)
 
 			peer_addresses.emplace_back(ip, port);
 		}
-	} else if (std::holds_alternative<bencode::string>(response_data["peers"]))
+	}
+	else if (std::holds_alternative<bencode::string>(response_data["peers"]))
 	{
 		const std::string peer_string = std::get<bencode::string>(response_data["peers"]);
 		if (peer_string.size() % (4 + 2) != 0)
@@ -672,7 +679,8 @@ Download::parse_tracker_response(const std::string &response)
 
 			peer_addresses.emplace_back(Socket::ntop(ip), std::to_string(ntohs(port)));
 		}
-	} else
+	}
+	else
 	{
 		throw std::runtime_error("HTTP response could not be decoded");
 	}

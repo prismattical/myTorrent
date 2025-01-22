@@ -64,7 +64,8 @@ std::tuple<bool, size_t> FileHandler::read_piece(size_t index, std::vector<uint8
 	{
 		bytes_to_read -= m_left_offset;
 		offset_piece = m_left_offset;
-	} else
+	}
+	else
 	{
 		offset_file = piece_length - m_left_offset;
 	}
@@ -107,7 +108,8 @@ void FileHandler::write_piece(const ReceivedPiece &piece, const std::filesystem:
 	if (index == *m_pieces.cbegin())
 	{
 		offset_piece = m_left_offset;
-	} else
+	}
+	else
 	{
 		offset_file = piece_length - m_left_offset;
 	}

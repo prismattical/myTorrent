@@ -29,7 +29,8 @@ std::optional<long long> decode_optional_int(bencode::data &source, const std::s
 	}
 }
 
-std::optional<bencode::list> decode_optional_list_view(bencode::data &source, const std::string &key)
+std::optional<bencode::list> decode_optional_list_view(bencode::data &source,
+						       const std::string &key)
 {
 	try
 	{
@@ -65,7 +66,8 @@ InfoDict::InfoDict(bencode::data &source)
 		const auto length = std::get<bencode::integer_view>(source["length"]);
 
 		files.emplace_back(path, length);
-	} else
+	}
+	else
 	{
 		name = std::get<bencode::string>(source["name"]);
 		for (auto &file : files_list)
@@ -115,7 +117,8 @@ MetainfoFile::MetainfoFile(const std::string &path_to_metainfo_file)
 		// if announce-list field is not present we emplace the only URL from announce field
 		announce_list.emplace_back();
 		announce_list[0].emplace_back(announce);
-	} else
+	}
+	else
 	{
 		auto list_of_tiers = std::get<bencode::list>(torrent_data["announce-list"]);
 

@@ -22,11 +22,13 @@ int AnnounceList::move_index_next()
 	if (m_j + 1 < m_announce_list[m_i].size())
 	{
 		++m_j;
-	} else if (m_i + 1 < m_announce_list.size())
+	}
+	else if (m_i + 1 < m_announce_list.size())
 	{
 		++m_i;
 		m_j = 0;
-	} else
+	}
+	else
 	{
 		return 1;
 	}
@@ -38,11 +40,13 @@ int AnnounceList::move_index_prev()
 	if (m_j != 0)
 	{
 		--m_j;
-	} else if (m_i != 0)
+	}
+	else if (m_i != 0)
 	{
 		--m_i;
 		m_j = m_announce_list[m_i].size() - 1;
-	} else
+	}
+	else
 	{
 		return 1;
 	}
