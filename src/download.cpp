@@ -96,7 +96,8 @@ std::optional<TrackerResponse> parse_tracker_response(const std::string &respons
 
 			ret.peers.emplace_back(peer_id, ip, port);
 		}
-	} else if (std::holds_alternative<bencode::string>(resp_data["peers"]))
+	}
+	else if (std::holds_alternative<bencode::string>(resp_data["peers"]))
 	{
 		const std::string peer_string = std::get<bencode::string>(resp_data["peers"]);
 		assert(peer_string.size() % (4 + 2) != 0 && "Malformed peers string received");
@@ -553,7 +554,8 @@ void Download::proceed_peer(const size_t index)
 	if ((m_fds[index].revents & POLLOUT) != 0)
 	{
 		(void)m_peer_connections[index].send();
-	} else if ((m_fds[index].revents & (POLLERR | POLLHUP)) != 0)
+	}
+	else if ((m_fds[index].revents & (POLLERR | POLLHUP)) != 0)
 	{
 		throw std::runtime_error("Connection reset");
 	}
@@ -582,7 +584,8 @@ void Download::proceed_tracker()
 	if ((m_fds.back().revents & POLLOUT) != 0)
 	{
 		(void)m_tracker_connection.send();
-	} else if ((m_fds.back().revents & (POLLERR | POLLHUP)) != 0)
+	}
+	else if ((m_fds.back().revents & (POLLERR | POLLHUP)) != 0)
 	{
 		throw std::runtime_error("Connection reset");
 	}

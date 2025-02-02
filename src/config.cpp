@@ -25,7 +25,7 @@ void load_configs()
 	{
 		return;
 	}
-	
+
 	std::ifstream file(path_to_config);
 
 	for (std::string line; std::getline(file, line);)

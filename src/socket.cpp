@@ -69,7 +69,6 @@ void TCPClient::connect(const std::string &hostname, const std::string &port)
 	struct addrinfo hints {};
 	struct addrinfo *res_temp = nullptr;
 
-	
 	std::memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;

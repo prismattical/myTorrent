@@ -2,8 +2,8 @@
 
 #include "peer_message.hpp"
 
-#include <vector>
 #include <string>
+#include <vector>
 
 struct ReceivedPiece {
 	friend class FileHandler;
