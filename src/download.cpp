@@ -4,6 +4,7 @@
 #include "bencode.hpp"
 #include "config.hpp"
 #include "download_strategy.hpp"
+#include "expected.hpp"
 #include "peer_connection.hpp"
 #include "peer_message.hpp"
 #include "tracker_connection.hpp"
@@ -21,6 +22,7 @@
 #include <iostream>
 #include <memory>
 #include <netinet/in.h>
+#include <optional>
 #include <poll.h>
 #include <span>
 #include <stdexcept>
@@ -29,6 +31,90 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+
+struct Peer {
+	std::string peer_id;
+	std::string ip;
+	std::string port;
+};
+
+struct TrackerResponse {
+	std::string failure_reason;
+	std::string warning_message; // optional
+	long long interval = 0;
+	long long min_interval = 0; // optional;
+	std::string tracker_id;
+	long long complete = 0;
+	long long incomplete = 0;
+	std::vector<Peer> peers;
+};
+
+std::optional<TrackerResponse> parse_tracker_response(const std::string &response)
+{
+	TrackerResponse ret;
+
+	const auto [status_code, status_message, headers, body] =
+		utils::parse_http_response(response);
+
+	// At first we check whether HTTP response was successful at all
+	if ((status_code != 200 && status_code != 203) || body == "")
+	{
+		return std::nullopt;
+	}
+
+	auto resp_data = bencode::decode(body);
+
+	const auto fr = utils::decode_optional_string(resp_data, "failure reason");
+	// if we got a failure reason, then there is no need to continue. Just return what we got
+	// I avoid using std::optional::value_or() in case some tracker decides to return an empty string as
+	// a value of this field. I'm not sure this ever happens, but I choose to be safe
+	if (fr.has_value())
+	{
+		ret.failure_reason = fr.value();
+		return std::make_optional(std::move(ret));
+	}
+
+	// not all of these values are optional, but I prefer this syntax over try-catch blocks
+	ret.warning_message =
+		utils::decode_optional_string(resp_data, "warning message").value_or("");
+	ret.interval = utils::decode_optional_int(resp_data, "interval").value_or(0);
+	ret.min_interval = utils::decode_optional_int(resp_data, "min interval").value_or(0);
+	ret.tracker_id = utils::decode_optional_string(resp_data, "tracker id").value_or("");
+	ret.complete = utils::decode_optional_int(resp_data, "complete").value_or(0);
+	ret.incomplete = utils::decode_optional_int(resp_data, "incomplete").value_or(0);
+
+	if (std::holds_alternative<bencode::list>(resp_data["peers"]))
+	{
+		const auto peer_list = std::get<bencode::list>(resp_data["peers"]);
+		for (const auto &peer : peer_list)
+		{
+			auto peer_dict = std::get<bencode::dict>(peer);
+			const auto peer_id = std::get<bencode::string>(peer_dict["peer id"]);
+			const auto ip = std::get<bencode::string>(peer_dict["ip"]);
+			const auto port =
+				std::to_string(std::get<bencode::integer>(peer_dict["port"]));
+
+			ret.peers.emplace_back(peer_id, ip, port);
+		}
+	} else if (std::holds_alternative<bencode::string>(resp_data["peers"]))
+	{
+		const std::string peer_string = std::get<bencode::string>(resp_data["peers"]);
+		assert(peer_string.size() % (4 + 2) != 0 && "Malformed peers string received");
+
+		for (size_t i = 0; i < peer_string.size(); i += (4 + 2))
+		{
+			uint32_t ip = 0;
+			uint16_t port = 0;
+			memcpy(&ip, peer_string.data() + i, sizeof ip);
+			memcpy(&port, peer_string.data() + i + sizeof ip, sizeof port);
+
+			ret.peers.emplace_back("", TCPClient::ntop(ip),
+					       std::to_string(ntohs(port)));
+		}
+	}
+
+	return std::make_optional(std::move(ret));
+}
 
 // Download ----------------------------------------------------------------------------
 
@@ -155,8 +241,7 @@ short Download::connection_events(const PeerConnection &connection)
 	return POLLIN | (connection.should_wait_for_send() ? POLLOUT : 0);
 }
 
-void Download::connect_to_new_peers(
-	const std::vector<std::pair<std::string, std::string>> &peer_addrs)
+void Download::connect_to_new_peers(const std::vector<Peer> &peer_addrs)
 {
 	// this ugly function takes all the new peer ip+port pairs
 	// iterates over all existing slots for file descriptors in m_fds vector and
@@ -182,8 +267,8 @@ void Download::connect_to_new_peers(
 				auto &this_conn = m_peer_connections[i];
 				try
 				{
-					this_conn = PeerConnection(it->first, it->second,
-								   m_handshake, m_bitfield);
+					this_conn = PeerConnection(it->ip, it->port, m_handshake,
+								   m_bitfield);
 
 				} catch (const std::exception &ex)
 				{
@@ -212,11 +297,16 @@ void Download::tracker_callback()
 	const std::string str(reinterpret_cast<const char *>(span.data()), span.size());
 	try
 	{
-		const auto [peers, interval] = parse_tracker_response(str);
+		// todo: rewrite this part
+		const auto resp = parse_tracker_response(str);
+		if (!resp.has_value())
+		{
+			throw std::runtime_error("parse_tracker_response() failed");
+		}
 		m_tracker_connection = {};
 		m_fds.back() = { -1, 0, 0 };
-		m_tracker_connection.set_timeout(interval);
-		connect_to_new_peers(peers);
+		m_tracker_connection.set_timeout(resp->interval);
+		connect_to_new_peers(resp->peers);
 	} catch (const std::exception &ex)
 	{
 		// if failed to do the callback,
@@ -463,9 +553,7 @@ void Download::proceed_peer(const size_t index)
 	if ((m_fds[index].revents & POLLOUT) != 0)
 	{
 		(void)m_peer_connections[index].send();
-	}
-
-	if ((m_fds[index].revents & (POLLERR | POLLHUP)) != 0)
+	} else if ((m_fds[index].revents & (POLLERR | POLLHUP)) != 0)
 	{
 		throw std::runtime_error("Connection reset");
 	}
@@ -494,9 +582,7 @@ void Download::proceed_tracker()
 	if ((m_fds.back().revents & POLLOUT) != 0)
 	{
 		(void)m_tracker_connection.send();
-	}
-
-	if ((m_fds.back().revents & (POLLERR | POLLHUP)) != 0)
+	} else if ((m_fds.back().revents & (POLLERR | POLLHUP)) != 0)
 	{
 		throw std::runtime_error("Connection reset");
 	}
@@ -625,69 +711,6 @@ void Download::copy_metainfo_file_to_cache(const std::string &path_to_torrent)
 	{
 		copy(path_to_torrent, path_to_destination);
 	}
-}
-
-std::tuple<std::vector<std::pair<std::string, std::string>>, long long>
-Download::parse_tracker_response(const std::string &response)
-{
-	const auto [return_code, body] = utils::parse_http_response(response);
-	if (return_code < 200 || return_code >= 300)
-	{
-		throw std::runtime_error(std::string("HTTP request failed: ") +
-					 std::to_string(return_code));
-	}
-
-	auto response_data = bencode::decode(body);
-
-	try
-	{
-		const auto failure_reason =
-			std::get<bencode::string>(response_data["failure reason"]);
-		throw std::runtime_error("Tracker returned failure: " + failure_reason);
-	} catch (const std::exception &ex)
-	{
-	}
-
-	std::vector<std::pair<std::string, std::string>> peer_addresses;
-
-	if (std::holds_alternative<bencode::list>(response_data["peers"]))
-	{
-		const auto peer_list = std::get<bencode::list>(response_data["peers"]);
-		for (const auto &peer : peer_list)
-		{
-			auto peer_dict = std::get<bencode::dict>(peer);
-			const auto ip = std::get<bencode::string>(peer_dict["ip"]);
-			const auto port =
-				std::to_string(std::get<bencode::integer>(peer_dict["port"]));
-
-			peer_addresses.emplace_back(ip, port);
-		}
-	}
-	else if (std::holds_alternative<bencode::string>(response_data["peers"]))
-	{
-		const std::string peer_string = std::get<bencode::string>(response_data["peers"]);
-		if (peer_string.size() % (4 + 2) != 0)
-		{
-			throw std::runtime_error("Binary data peer string is ill-formed");
-		}
-		for (size_t i = 0; i < peer_string.size(); i += (4 + 2))
-		{
-			uint32_t ip;
-			uint16_t port;
-			memcpy(&ip, peer_string.data() + i, sizeof ip);
-			memcpy(&port, peer_string.data() + i + sizeof ip, sizeof port);
-
-			peer_addresses.emplace_back(Socket::ntop(ip), std::to_string(ntohs(port)));
-		}
-	}
-	else
-	{
-		throw std::runtime_error("HTTP response could not be decoded");
-	}
-
-	long long interval = std::get<bencode::integer>(response_data["interval"]);
-
-	return { peer_addresses, interval };
 }
 
 Download::AllTrackersNotRespondingError::AllTrackersNotRespondingError(const std::string &msg)

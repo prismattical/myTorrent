@@ -59,17 +59,13 @@ class Download {
 	static short connection_events(const TrackerConnection &connection);
 	static short connection_events(const PeerConnection &connection);
 
-	static std::tuple<std::vector<std::pair<std::string, std::string>>, long long>
-	parse_tracker_response(const std::string &response);
-
 	void peer_callback(size_t index);
 	void tracker_callback();
 
 	void proceed_peer(size_t index);
 	void proceed_tracker();
 
-	void
-	connect_to_new_peers(const std::vector<std::pair<std::string, std::string>> &peer_addrs);
+	void connect_to_new_peers(const std::vector<struct Peer> &peer_addrs);
 	void connect_to_tracker();
 
 	void update_time_peer(size_t index);

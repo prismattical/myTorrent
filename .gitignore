@@ -2,8 +2,11 @@ torrents/
 cache/
 downloads/
 build/
+test/
 .vscode/
 .cache/
 myTorrent
 .clangd
 *.torrent
+*_unittest
+*_test

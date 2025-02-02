@@ -8,14 +8,14 @@
 #include <vector>
 
 class TrackerConnection {
-	static constexpr int m_recv_buffer_length = 4096;
+	static constexpr int recv_buffer_size = 4096;
 
-	Socket m_socket;
+	TCPClient m_socket;
 
 	std::vector<uint8_t> m_send_buffer;
 	size_t m_send_offset = 0;
 
-	std::vector<uint8_t> m_recv_buffer = std::vector<uint8_t>(m_recv_buffer_length);
+	std::vector<uint8_t> m_recv_buffer = std::vector<uint8_t>(recv_buffer_size);
 	size_t m_recv_offset = 0;
 
 	bool m_request_sent = false;
@@ -27,6 +27,10 @@ public:
 	TrackerConnection() = default;
 	TrackerConnection(const std::string &hostname, const std::string &port,
 			  std::span<const uint8_t> connection_id, const std::string &info_hash);
+
+	void connect(const std::string &hostname, const std::string &port,
+		     std::span<const uint8_t> connection_id, const std::string &info_hash);
+	void disconnect();
 
 	[[nodiscard]] int get_socket_fd() const;
 	[[nodiscard]] bool should_wait_for_send() const;

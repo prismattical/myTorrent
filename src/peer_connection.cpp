@@ -5,12 +5,11 @@
 
 #include <arpa/inet.h>
 #include <chrono>
-#include <netinet/in.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <netinet/in.h>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -25,55 +24,99 @@ int PeerConnection::get_socket_fd() const
 PeerConnection::PeerConnection(const std::string &ip, const std::string &port,
 			       const message::Handshake &handshake,
 			       const message::Bitfield &bitfield)
-	: m_socket{ ip, port, Socket::IP_UNSPEC }
-	, peer_bitfield(bitfield.get_bitfield_length())
 {
+	connect(ip, port, handshake, bitfield);
+}
+
+void PeerConnection::connect(const std::string &ip, const std::string &port,
+			     const message::Handshake &handshake, const message::Bitfield &bitfield)
+{
+	m_socket.connect(ip, port);
+
+	peer_bitfield = message::Bitfield(bitfield.get_bitfield_length());
 	m_send_queue.emplace_back(std::make_unique<message::Handshake>(handshake));
 	m_send_queue.emplace_back(std::make_unique<message::Bitfield>(bitfield));
 }
 
+void PeerConnection::disconnect()
+{
+	m_socket.disconnect();
+}
+
 int PeerConnection::recv()
 {
+	static constexpr size_t hs_len = 68;
+	static constexpr size_t length_len = 4;
+
 	switch (m_state)
 	{
-	case States::HANDSHAKE:
-		static constexpr size_t hs_len = 68;
-		m_socket.recv({ m_recv_buffer.data(), hs_len }, m_recv_offset);
-		if (m_recv_offset == 0)
+	case States::HANDSHAKE: {
+		long rc = m_socket.recv2(
+			{ m_recv_buffer.data() + m_recv_offset, hs_len - m_recv_offset });
+
+		if (rc == -1)
 		{
+			return 1;
+		}
+
+		m_recv_offset += rc;
+
+		if (m_recv_offset == hs_len - 1)
+		{
+			m_recv_offset = 0;
 			m_state = States::LENGTH;
 			// setting it like this allows to simplify implementation of view_recv_message()
-			m_message_length = hs_len - 4;
+			m_message_length = hs_len - length_len;
 			return 0;
 		}
-		break;
-	case States::LENGTH:
-		m_socket.recv({ m_recv_buffer.data(), 4 }, m_recv_offset);
-		if (m_recv_offset == 0)
+		return 1;
+	}
+	case States::LENGTH: {
+		long rc = m_socket.recv2(
+			{ m_recv_buffer.data() + m_recv_offset, length_len - m_recv_offset });
+		if (rc == -1)
 		{
-			memcpy(&m_message_length, m_recv_buffer.data(), sizeof(m_message_length));
-			m_message_length = ntohl(m_message_length);
-			if (m_message_length == 0)
-			{
-				// KeepAlive message received
-				return 0;
-			}
-			m_state = States::MESSAGE;
-			// this can save a spare call to poll()
-			[[fallthrough]];
+			return 1;
 		}
-		else
+
+		m_recv_offset += rc;
+
+		if (m_recv_offset != length_len - 1)
 		{
-			break;
+			return 1;
 		}
-	case States::MESSAGE:
-		m_socket.recv({ m_recv_buffer.data() + 4, m_message_length }, m_recv_offset);
-		if (m_recv_offset == 0)
+
+		m_recv_offset = 0;
+		memcpy(&m_message_length, m_recv_buffer.data(), sizeof(m_message_length));
+		m_message_length = ntohl(m_message_length);
+		if (m_message_length == 0)
 		{
+			// KeepAlive message received
+			return 0;
+		}
+		m_state = States::MESSAGE;
+		// this can save a spare call to poll()
+		[[fallthrough]];
+	}
+	case States::MESSAGE: {
+		long rc = m_socket.recv2({ m_recv_buffer.data() + length_len + m_recv_offset,
+					   m_message_length - m_recv_offset });
+
+		if (rc == -1)
+		{
+			return 1;
+		}
+
+		m_recv_offset += rc;
+
+		if (m_recv_offset == m_message_length - 1)
+		{
+			m_recv_offset = 0;
 			m_state = States::LENGTH;
 			return 0;
 		}
-		break;
+		return 1;
+	}
 	default:
 		throw std::runtime_error("Invalid state value");
 	}
@@ -82,8 +125,17 @@ int PeerConnection::recv()
 
 int PeerConnection::send()
 {
-	m_socket.send(m_send_queue.front()->serialized(), m_send_offset);
-	if (m_send_offset == 0)
+	long rc = m_socket.send({ m_send_queue.front()->serialized().data() + m_send_offset,
+				  m_send_queue.front()->serialized().size() - m_send_offset });
+
+	if (rc == -1)
+	{
+		return 1;
+	}
+
+	m_send_offset += rc;
+
+	if (m_send_offset == m_send_queue.front()->serialized().size() - 1)
 	{
 		m_send_queue.pop_front();
 		return 0;
@@ -101,16 +153,18 @@ std::span<const uint8_t> PeerConnection::view_recv_message() const
 	return { m_recv_buffer.data(), 4 + m_message_length };
 }
 
-std::vector<uint8_t> PeerConnection::get_recv_message()
+std::vector<uint8_t> &&PeerConnection::get_recv_message()
 {
-	auto ret = std::move(m_recv_buffer);
+	auto &&ret = std::move(m_recv_buffer);
 	m_recv_buffer = std::vector<uint8_t>(recv_buffer_size);
-	return ret;
+	return std::move(ret);
 }
 
 bool PeerConnection::update_time()
 {
-	using namespace std::chrono;
+	using std::chrono::steady_clock;
+	using std::chrono::seconds;
+
 	auto curr_tp = steady_clock::now();
 	if (duration_cast<seconds>(m_tp - curr_tp).count() > keepalive_timeout)
 	{

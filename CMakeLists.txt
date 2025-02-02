@@ -14,7 +14,7 @@ set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
 find_package(OpenSSL REQUIRED)
 
-set(EXTERNAL_LIBS external/bencode.hpp)
+set(EXTERNAL_LIBS external/bencode.hpp external/expected.hpp)
 
 set(SOURCE_FILES src/config.cpp src/utils.cpp src/socket.cpp src/tracker_connection.cpp
     src/download.cpp src/peer_connection.cpp src/peer_message.cpp src/download_strategy.cpp

@@ -1,7 +1,11 @@
 #pragma once
 
+#include "bencode.hpp"
+
 #include <array>
 #include <cstdint>
+#include <map>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -48,9 +52,10 @@ parse_announce_url(const std::string &url);
  * specified in the response. Right now it only returns the essential for
  * this application parts.
  * 
- * @return HTTP return status code and body of the response.
+ * @return status code, status message, map of header name + header value and body in that order
  */
-[[nodiscard]] std::tuple<int, std::string> parse_http_response(const std::string &responce);
+[[nodiscard]] std::tuple<int, std::string, std::map<std::string, std::string>, std::string>
+parse_http_response(const std::string &responce);
 
 /**
  * @brief Generates random connection id
@@ -59,4 +64,12 @@ parse_announce_url(const std::string &url);
  * It is completely random and does not store any information about client.
  */
 [[nodiscard]] std::array<uint8_t, id_length> generate_connection_id();
+
+[[nodiscard]] std::optional<std::string> decode_optional_string(bencode::data &source,
+								const std::string &key);
+[[nodiscard]] std::optional<long long> decode_optional_int(bencode::data &source,
+							   const std::string &key);
+[[nodiscard]] std::optional<bencode::list> decode_optional_list_view(bencode::data &source,
+								     const std::string &key);
+
 } // namespace utils

@@ -1,45 +1,13 @@
 #include "metainfo_file.hpp"
 
+#include "utils.hpp"
+
 #include <fstream>
 #include <optional>
 #include <random>
 #include <string>
 
 // InfoDict ----------------------------------------------------------------------------
-
-std::optional<std::string> decode_optional_string(bencode::data &source, const std::string &key)
-{
-	try
-	{
-		return std::string(std::get<bencode::string>(source[key]));
-	} catch (const std::exception &ex)
-	{
-		return std::nullopt;
-	}
-}
-
-std::optional<long long> decode_optional_int(bencode::data &source, const std::string &key)
-{
-	try
-	{
-		return std::get<bencode::integer>(source[key]);
-	} catch (const std::exception &ex)
-	{
-		return std::nullopt;
-	}
-}
-
-std::optional<bencode::list> decode_optional_list_view(bencode::data &source,
-						       const std::string &key)
-{
-	try
-	{
-		return std::get<bencode::list>(source[key]);
-	} catch (const std::exception &ex)
-	{
-		return std::nullopt;
-	}
-}
 
 InfoDict::InfoDict(bencode::data &source)
 {
@@ -54,10 +22,10 @@ InfoDict::InfoDict(bencode::data &source)
 	pieces = std::get<bencode::string>(source["pieces"]);
 	// private trackers are not supported (yet)
 	// so this variable is unused
-	is_private = decode_optional_int(source, "private").value_or(0) == 1;
+	is_private = utils::decode_optional_int(source, "private").value_or(0) == 1;
 
 	bencode::list files_list =
-		decode_optional_list_view(source, "files").value_or(bencode::list());
+		utils::decode_optional_list_view(source, "files").value_or(bencode::list());
 	// single file mode is treated as multifile, but with a single file
 	if (files_list.empty())
 	{
@@ -103,14 +71,15 @@ MetainfoFile::MetainfoFile(const std::string &path_to_metainfo_file)
 
 	bencode::data torrent_data = bencode::decode(torrent_string);
 
-	creation_date = decode_optional_int(torrent_data, "creation date").value_or(-1);
-	comment = decode_optional_string(torrent_data, "comment").value_or("");
-	created_by = decode_optional_string(torrent_data, "created by").value_or("");
+	creation_date = utils::decode_optional_int(torrent_data, "creation date").value_or(-1);
+	comment = utils::decode_optional_string(torrent_data, "comment").value_or("");
+	created_by = utils::decode_optional_string(torrent_data, "created by").value_or("");
 
 	announce = std::get<bencode::string>(torrent_data["announce"]);
 
 	bencode::list list_of_tiers =
-		decode_optional_list_view(torrent_data, "announce-list").value_or(bencode::list());
+		utils::decode_optional_list_view(torrent_data, "announce-list")
+			.value_or(bencode::list());
 
 	if (list_of_tiers.empty())
 	{

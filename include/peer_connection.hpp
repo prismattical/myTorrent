@@ -14,7 +14,7 @@
 
 class PeerConnection {
 	static constexpr size_t max_block_size = 16384;
-	static constexpr size_t recv_buffer_size = max_block_size + 13;
+	static constexpr size_t recv_buffer_size = 4 + 1 + 4 + 4 + max_block_size;
 	static constexpr int keepalive_timeout = 115; // in seconds
 
 	enum class States {
@@ -25,7 +25,7 @@ class PeerConnection {
 		MAX_STATES,
 	};
 
-	Socket m_socket;
+	TCPClient m_socket;
 
 	States m_state = States::HANDSHAKE;
 
@@ -41,6 +41,7 @@ class PeerConnection {
 	static constexpr size_t max_pending = 4;
 
 	std::vector<message::Request> m_request_queue;
+	size_t m_rq_current = 0; // rq stands for request queue
 
 	void send_message(std::unique_ptr<message::Message> message);
 
@@ -48,11 +49,13 @@ class PeerConnection {
 	bool m_peer_choking = true;
 
 public:
-	size_t m_rq_current = 0; // rq stands for request queue
-
 	PeerConnection() = default;
 	PeerConnection(const std::string &ip, const std::string &port,
 		       const message::Handshake &handshake, const message::Bitfield &bitfield);
+
+	void connect(const std::string &ip, const std::string &port,
+		     const message::Handshake &handshake, const message::Bitfield &bitfield);
+	void disconnect();
 
 	message::Bitfield peer_bitfield;
 	bool am_choking = true;
@@ -84,7 +87,7 @@ public:
 	[[nodiscard]] bool should_wait_for_send() const;
 
 	[[nodiscard]] std::span<const uint8_t> view_recv_message() const;
-	[[nodiscard]] std::vector<uint8_t> get_recv_message();
+	[[nodiscard]] std::vector<uint8_t> &&get_recv_message();
 
 	bool update_time();
 };
