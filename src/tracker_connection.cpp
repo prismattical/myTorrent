@@ -12,15 +12,47 @@
 #include <vector>
 
 TrackerConnection::TrackerConnection(const std::string &hostname, const std::string &port,
-				     std::span<const uint8_t> connection_id,
-				     const std::string &info_hash)
+				     const TrackerRequestParams &param)
 {
-	connect(hostname, port, connection_id, info_hash);
+	connect(hostname, port, param);
+}
+
+std::string generate_request(const TrackerRequestParams &param)
+{
+	const std::string peer_id = std::string(param.peer_id.begin(), param.peer_id.end());
+
+	std::string query = "/announce?info_hash=" + param.info_hash + "&peer_id=" + peer_id +
+			    "&port=" + param.port;
+	if (param.compact)
+	{
+		query += "&compact=1";
+	}
+	if (param.no_peer_id && !param.compact)
+	{
+		query += "&no_peer_id";
+	}
+	if (!param.ip.empty())
+	{
+		query += "&ip=" + param.ip;
+	}
+	if (!param.numwant.empty())
+	{
+		query += "&numwant=" + param.numwant;
+	}
+	if (!param.key.empty())
+	{
+		query += "&key=" + param.key;
+	}
+	if (!param.trackerid.empty())
+	{
+		query += "&trackerid" + param.trackerid;
+	}
+
+	return query;
 }
 
 void TrackerConnection::connect(const std::string &hostname, const std::string &port,
-				std::span<const uint8_t> connection_id,
-				const std::string &info_hash)
+				const TrackerRequestParams &param)
 
 {
 	m_socket.connect(hostname, port);
@@ -30,11 +62,7 @@ void TrackerConnection::connect(const std::string &hostname, const std::string &
 	m_request_sent = false;
 	m_timeout = 0;
 
-	const std::string connection_id_str =
-		std::string(connection_id.begin(), connection_id.end());
-
-	const std::string query = std::string("/announce") + "?" + "info_hash=" + info_hash + "&" +
-				  "peer_id=" + connection_id_str + "&" + "port=" + "8765";
+	const std::string query = generate_query(param);
 
 	std::string request_str;
 	request_str += "GET " + query + " " + "HTTP/1.1" + "\r\n";
@@ -43,7 +71,7 @@ void TrackerConnection::connect(const std::string &hostname, const std::string &
 	request_str += "Accept: text/plain\r\n";
 	request_str += "\r\n";
 
-	m_send_buffer = std::vector<uint8_t>(request_str.begin(), request_str.end());
+	m_send_buffer = std::vector<std::uint8_t>(request_str.begin(), request_str.end());
 }
 
 void TrackerConnection::disconnect()
@@ -61,15 +89,15 @@ bool TrackerConnection::should_wait_for_send() const
 	return !m_request_sent;
 }
 
-std::span<const uint8_t> TrackerConnection::view_recv_message() const
+std::span<const std::uint8_t> TrackerConnection::view_recv_message() const
 {
 	return { m_recv_buffer.begin(), m_recv_offset };
 }
 
-std::vector<uint8_t> &&TrackerConnection::get_recv_message()
+std::vector<std::uint8_t> &&TrackerConnection::get_recv_message()
 {
 	auto &&ret = std::move(m_recv_buffer);
-	m_recv_buffer = std::vector<uint8_t>(recv_buffer_size);
+	m_recv_buffer = std::vector<std::uint8_t>(recv_buffer_size);
 	return std::move(ret);
 }
 
@@ -113,7 +141,7 @@ int TrackerConnection::recv()
 	// if buffer was filled up and there is no more space available
 	if (m_recv_offset == m_recv_buffer.size())
 	{
-		std::cerr << "HTTP responce is too large" << '\n';
+		std::cerr << "HTTP response is too large" << '\n';
 		throw std::runtime_error("recv() failed");
 	}
 
@@ -139,8 +167,17 @@ bool TrackerConnection::update_time()
 {
 	using std::chrono::steady_clock;
 	using std::chrono::seconds;
+	if (m_timeout == 0)
+	{
+		return false;
+	}
 
 	auto seconds_passed = duration_cast<seconds>(steady_clock::now() - m_tp).count();
 	// std::cout << "Seconds passed since last tracker call: " << seconds_passed << "\n";
-	return m_timeout != 0 && seconds_passed >= m_timeout;
+	if (seconds_passed >= m_timeout)
+	{
+		m_timeout = 0;
+		return true;
+	}
+	return false;
 }

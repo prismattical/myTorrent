@@ -65,6 +65,8 @@ TCPClient::TCPClient(const std::string &hostname, const std::string &port)
 
 void TCPClient::connect(const std::string &hostname, const std::string &port)
 {
+	this->~TCPClient();
+
 	int rc = 0;
 	struct addrinfo hints {};
 	struct addrinfo *res_temp = nullptr;
