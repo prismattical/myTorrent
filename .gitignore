@@ -2,7 +2,6 @@ torrents/
 cache/
 downloads/
 build/
-test/
 .vscode/
 .cache/
 myTorrent
