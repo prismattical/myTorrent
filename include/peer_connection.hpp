@@ -1,22 +1,48 @@
 #pragma once
 
 #include "peer_message.hpp"
+#include "piece.hpp"
 #include "socket.hpp"
 
-#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
+#include <set>
 #include <span>
 #include <vector>
 
-class PeerConnection {
+class RequestQueue {
+public:
 	static constexpr size_t max_block_size = 16384;
+	static constexpr std::size_t max_pending = 4;
+
+private:
+	std::deque<message::Request> m_requests;
+	std::size_t m_current_req = 0;
+	std::size_t m_forward_req = 0;
+
+public:
+	RequestQueue() = default;
+	void reset();
+	void create_requests_for_piece(size_t index, size_t size);
+	[[nodiscard]] int send_request(class PeerConnection *parent);
+	[[nodiscard]] int validate_block(const message::Piece &block);
+	[[nodiscard]] std::set<std::size_t> assigned_pieces() const;
+	[[nodiscard]] bool empty() const;
+};
+
+class PeerConnection {
+	friend RequestQueue;
+
+public:
+	static constexpr size_t max_block_size = RequestQueue::max_block_size;
 	static constexpr size_t recv_buffer_size = 4 + 1 + 4 + 4 + max_block_size;
 	static constexpr int keepalive_timeout = 115; // in seconds
 
+private:
 	enum class States {
 		HANDSHAKE,
 		LENGTH,
@@ -38,17 +64,21 @@ class PeerConnection {
 
 	std::chrono::steady_clock::time_point m_tp = std::chrono::steady_clock::now();
 
-	static constexpr size_t max_pending = 4;
-
-	std::vector<message::Request> m_request_queue;
-	size_t m_rq_current = 0; // rq stands for request queue
-
-	void send_message(std::unique_ptr<message::Message> message);
+	RequestQueue m_request_queue;
+	static constexpr size_t m_allowed_failures = 4;
+	size_t m_failures = 0;
+	ReceivedPiece m_assigned_piece;
 
 	bool m_am_interested = false;
 	bool m_peer_choking = true;
 
+	void add_message_to_queue(std::unique_ptr<message::Message> message);
+
 public:
+	message::Bitfield peer_bitfield;
+	bool am_choking = true;
+	bool peer_interested = false;
+
 	PeerConnection() = default;
 	PeerConnection(const std::string &ip, const std::string &port,
 		       const message::Handshake &handshake, const message::Bitfield &bitfield);
@@ -57,27 +87,47 @@ public:
 		     const message::Handshake &handshake, const message::Bitfield &bitfield);
 	void disconnect();
 
-	message::Bitfield peer_bitfield;
-	bool am_choking = true;
-	bool peer_interested = false;
-
+	void send_keepalive();
 	void send_choke();
 	void send_unchoke();
 	void send_notinterested();
 	void send_interested();
 
-	// for piece like big piece, not message::Piece
-	// the fact that these two things have the same name is so damn confusing
-	void create_requests_for_piece(size_t index, size_t piece_size);
-	// must be called repeatedly after each recv() of a message::Piece
-	// if it returns not 0, it means that that message::Piece was the last part
-	// of a big piece. Otherwise it returns 0
-	int send_requests();
-	void send_initial_requests();
-	// during endgame should be called by all peers if piece was already downloaded
-	// by someone else
-	void cancel_requests_by_cancel(size_t index);
-	void cancel_requests_on_choke();
+	/**
+	 * @brief Sends requests
+	 * 
+	 * @return 0 on success
+	 * @return 1 if caller should ask dl_strategy to assign next piece to this peer
+	 * before calling again
+	 */
+	[[nodiscard]] int send_request();
+	/**
+	 * @brief Creates requests for a piece 
+	 * that later are sent with send_request() method
+	 * 
+	 * @param index The index of the piece
+	 * @param size The size of the piece
+	 */
+	void create_requests_for_piece(size_t index, size_t size);
+	/**
+	 * @brief Validates and adds the block to an assigned piece
+	 * 
+	 * @return -1 on failure
+	 * @return 0 on sucess
+	 * @return 1 on sucess and that block was the last block of the piece
+	 */
+	[[nodiscard]] int add_block();
+
+	/**
+	 * @brief Resets request queue
+	 */
+	void reset_request_queue();
+	/**
+	 * @brief Returns all the pieces that were assigned by dl strategy
+	 * 
+	 * @return A set of all unique indices of pieces that were assigned
+	 */
+	[[nodiscard]] std::set<std::size_t> assigned_pieces() const;
 
 	[[nodiscard]] bool is_downloading() const;
 
@@ -87,7 +137,6 @@ public:
 	[[nodiscard]] bool should_wait_for_send() const;
 
 	[[nodiscard]] std::span<const uint8_t> view_recv_message() const;
-	[[nodiscard]] std::vector<uint8_t> &&get_recv_message();
 
 	bool update_time();
 };

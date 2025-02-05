@@ -2,18 +2,24 @@
 
 #include "peer_message.hpp"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
 struct ReceivedPiece {
 	friend class FileHandler;
 
-public:
+private:
 	std::vector<message::Piece> m_pieces;
 
+public:
 	ReceivedPiece() = default;
-	ReceivedPiece(ReceivedPiece &other) = delete;
-	ReceivedPiece &operator=(ReceivedPiece &other) = delete;
+	~ReceivedPiece() = default;
+	ReceivedPiece(ReceivedPiece &&) = default;
+	ReceivedPiece &operator=(ReceivedPiece &&) = default;
+
+	ReceivedPiece(const ReceivedPiece &) = delete;
+	ReceivedPiece &operator=(const ReceivedPiece &) = delete;
 
 	void add_block(message::Piece &&block);
 	void clear();

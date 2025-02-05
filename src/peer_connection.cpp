@@ -3,7 +3,9 @@
 #include "peer_message.hpp"
 #include "socket.hpp"
 
+#include <algorithm>
 #include <arpa/inet.h>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -16,9 +18,100 @@
 #include <utility>
 #include <vector>
 
+void RequestQueue::reset()
+{
+	m_requests.clear();
+	m_current_req = 0;
+	m_forward_req = 0;
+}
+
+void RequestQueue::create_requests_for_piece(size_t index, size_t size)
+{
+	// ceiling rounding division
+	const std::size_t blocks = (size + max_block_size - 1) / max_block_size;
+
+	for (size_t i = 0; i < blocks; ++i)
+	{
+		uint32_t begin = i * max_block_size;
+		m_requests.emplace_back(static_cast<uint32_t>(index), begin,
+					std::min<uint32_t>(size - begin, max_block_size));
+	}
+}
+
+int RequestQueue::send_request(PeerConnection *parent)
+{
+	while (m_forward_req < m_current_req + max_pending)
+	{
+		parent->add_message_to_queue(
+			std::make_unique<message::Request>(m_requests[m_forward_req]));
+		++m_forward_req;
+	}
+	if (m_forward_req >= m_requests.size())
+	{
+		// add next piece to the queue
+		return 1;
+	}
+
+	return 0;
+}
+
+int RequestQueue::validate_block(const message::Piece &block)
+{
+	const message::Request &rq = m_requests[m_current_req];
+	const bool res = rq.get_index() == block.get_index() &&
+			 rq.get_begin() == block.get_begin() &&
+			 rq.get_length() == block.get_length();
+	if (!res)
+	{
+		// block is invalid
+		return -1;
+	}
+
+	++m_current_req;
+	if (m_current_req == m_requests.size() || // final block of final piece
+	    m_requests[m_current_req].get_index() != block.get_index())
+	{
+		const size_t ind = block.get_index();
+
+		const size_t erased = std::erase_if(m_requests, [ind](const message::Request &rq) {
+			return rq.get_index() == ind;
+		});
+
+		m_current_req -= erased;
+		m_forward_req -= erased;
+
+		assert(m_current_req == 0 && "It should be zero though");
+
+		// block is valid and last block of the piece
+		return 1;
+	}
+	// block is valid
+	return 0;
+}
+
+std::set<std::size_t> RequestQueue::assigned_pieces() const
+{
+	std::set<std::size_t> ret;
+	for (const auto &rq : m_requests)
+	{
+		ret.insert(rq.get_index());
+	}
+	return ret;
+}
+
+[[nodiscard]] bool RequestQueue::empty() const
+{
+	return m_requests.empty();
+}
+
 int PeerConnection::get_socket_fd() const
 {
 	return m_socket.get_fd();
+}
+
+void PeerConnection::add_message_to_queue(std::unique_ptr<message::Message> message)
+{
+	m_send_queue.emplace_back(std::move(message));
 }
 
 PeerConnection::PeerConnection(const std::string &ip, const std::string &port,
@@ -34,8 +127,8 @@ void PeerConnection::connect(const std::string &ip, const std::string &port,
 	m_socket.connect(ip, port);
 
 	peer_bitfield = message::Bitfield(bitfield.get_bitfield_length());
-	m_send_queue.emplace_back(std::make_unique<message::Handshake>(handshake));
-	m_send_queue.emplace_back(std::make_unique<message::Bitfield>(bitfield));
+	add_message_to_queue(std::make_unique<message::Handshake>(handshake));
+	add_message_to_queue(std::make_unique<message::Bitfield>(bitfield));
 }
 
 void PeerConnection::disconnect()
@@ -125,8 +218,9 @@ int PeerConnection::recv()
 
 int PeerConnection::send()
 {
-	long rc = m_socket.send({ m_send_queue.front()->serialized().data() + m_send_offset,
-				  m_send_queue.front()->serialized().size() - m_send_offset });
+	std::span<const std::uint8_t> curr_mes = m_send_queue.front()->serialized();
+	long rc =
+		m_socket.send({ curr_mes.data() + m_send_offset, curr_mes.size() - m_send_offset });
 
 	if (rc == -1)
 	{
@@ -135,7 +229,7 @@ int PeerConnection::send()
 
 	m_send_offset += rc;
 
-	if (m_send_offset == m_send_queue.front()->serialized().size() - 1)
+	if (m_send_offset == curr_mes.size() - 1)
 	{
 		m_send_queue.pop_front();
 		return 0;
@@ -153,13 +247,6 @@ std::span<const uint8_t> PeerConnection::view_recv_message() const
 	return { m_recv_buffer.data(), 4 + m_message_length };
 }
 
-std::vector<uint8_t> &&PeerConnection::get_recv_message()
-{
-	auto &&ret = std::move(m_recv_buffer);
-	m_recv_buffer = std::vector<uint8_t>(recv_buffer_size);
-	return std::move(ret);
-}
-
 bool PeerConnection::update_time()
 {
 	using std::chrono::steady_clock;
@@ -168,75 +255,55 @@ bool PeerConnection::update_time()
 	auto curr_tp = steady_clock::now();
 	if (duration_cast<seconds>(m_tp - curr_tp).count() > keepalive_timeout)
 	{
-		m_send_queue.push_back(std::make_unique<message::KeepAlive>());
+		send_keepalive();
 		m_tp = curr_tp;
 		return true;
 	}
 	return false;
 }
 
-void PeerConnection::send_message(std::unique_ptr<message::Message> message)
+int PeerConnection::send_request()
 {
-	m_send_queue.emplace_back(std::move(message));
+	return m_request_queue.send_request(this);
 }
 
-void PeerConnection::create_requests_for_piece(size_t index, size_t piece_size)
+void PeerConnection::create_requests_for_piece(size_t index, size_t size)
 {
-	m_rq_current = 0;
-
-	m_request_queue.resize((piece_size + max_block_size - 1) / max_block_size);
-
-	for (size_t i = 0; i < m_request_queue.size(); ++i)
-	{
-		uint32_t begin = i * max_block_size;
-		m_request_queue[i] = { static_cast<uint32_t>(index), begin,
-				       std::min<uint32_t>(piece_size - begin, max_block_size) };
-	}
-}
-void PeerConnection::send_initial_requests()
-{
-	for (size_t i = 0; i < max_pending && i < m_request_queue.size(); ++i)
-	{
-		m_send_queue.emplace_back(
-			std::make_unique<message::Request>(m_request_queue.at(i)));
-	}
+	m_request_queue.create_requests_for_piece(index, size);
 }
 
-int PeerConnection::send_requests()
+int PeerConnection::add_block()
 {
-	if (m_rq_current + max_pending < m_request_queue.size())
+	message::Piece block(std::move(m_recv_buffer));
+	m_recv_buffer.resize(recv_buffer_size);
+
+	int rc = m_request_queue.validate_block(block);
+	if (rc != -1)
 	{
-		m_send_queue.emplace_back(std::make_unique<message::Request>(
-			m_request_queue.at(m_rq_current + max_pending)));
+		m_assigned_piece.add_block(std::move(block));
+		m_failures = 0;
+		return rc;
 	}
-
-	++m_rq_current;
-
-	if (m_rq_current == m_request_queue.size())
+	if (rc == -1)
 	{
-		return 1;
-	}
-
-	return 0;
-}
-
-void PeerConnection::cancel_requests_by_cancel(size_t index)
-{
-	if (!m_request_queue.empty() && index == m_request_queue[0].get_index())
-	{
-		for (size_t i = m_rq_current;
-		     i < m_rq_current + max_pending - 1 && i < m_request_queue.size(); ++i)
+		if (++m_failures >= m_allowed_failures)
 		{
-			m_send_queue.emplace_back(std::make_unique<message::Cancel>(
-				m_request_queue[i].create_cancel()));
+			return -1;
 		}
-		m_request_queue.clear();
+		return 0;
 	}
+	// must never be there
+	return -1;
 }
 
-void PeerConnection::cancel_requests_on_choke()
+std::set<std::size_t> PeerConnection::assigned_pieces() const
 {
-	m_request_queue.clear();
+	return m_request_queue.assigned_pieces();
+}
+
+void PeerConnection::reset_request_queue()
+{
+	m_request_queue.reset();
 }
 
 bool PeerConnection::is_downloading() const
@@ -244,11 +311,16 @@ bool PeerConnection::is_downloading() const
 	return !m_request_queue.empty();
 }
 
+void PeerConnection::send_keepalive()
+{
+	add_message_to_queue(std::make_unique<message::KeepAlive>());
+}
+
 void PeerConnection::send_choke()
 {
 	if (!m_peer_choking)
 	{
-		send_message(std::make_unique<message::Choke>());
+		add_message_to_queue(std::make_unique<message::Choke>());
 		m_peer_choking = true;
 	}
 }
@@ -257,7 +329,7 @@ void PeerConnection::send_unchoke()
 {
 	if (m_peer_choking)
 	{
-		send_message(std::make_unique<message::Unchoke>());
+		add_message_to_queue(std::make_unique<message::Unchoke>());
 		m_peer_choking = false;
 	}
 }
@@ -266,7 +338,7 @@ void PeerConnection::send_interested()
 {
 	if (!m_am_interested)
 	{
-		send_message(std::make_unique<message::Interested>());
+		add_message_to_queue(std::make_unique<message::Interested>());
 		m_am_interested = true;
 	}
 }
@@ -275,7 +347,7 @@ void PeerConnection::send_notinterested()
 {
 	if (m_am_interested)
 	{
-		send_message(std::make_unique<message::NotInterested>());
+		add_message_to_queue(std::make_unique<message::NotInterested>());
 		m_am_interested = false;
 	}
 }

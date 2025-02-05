@@ -377,7 +377,7 @@ void Download::peer_callback(const size_t index)
 				std::clog << "Received Choke from peer" << '\n';
 
 				conn.am_choking = true;
-				conn.cancel_requests_on_choke();
+				conn.reset_request_queue();
 
 				break;
 			}
@@ -463,7 +463,7 @@ void Download::peer_callback(const size_t index)
 				  << " for piece " << ind << " meanwhile conn.m_rq_current "
 				  << conn.m_rq_current << '\n';
 
-			if (conn.send_requests() != 0) // last block received
+			if (conn.send_request() != 0) // last block received
 			{
 				std::ofstream fout("testout");
 
