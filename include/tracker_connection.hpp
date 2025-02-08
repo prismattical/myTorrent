@@ -43,15 +43,8 @@ class TrackerConnection {
 
 	bool m_request_sent = false;
 
-	std::chrono::steady_clock::time_point m_tp;
+	std::chrono::steady_clock::time_point m_tp = std::chrono::steady_clock::now();
 	long long m_timeout = 0;
-	/**
-	 * @brief Generates query string
-	 * 
-	 * @param param The struct that contains data needed to generate query
-	 * @return The query string
-	 */
-	static std::string generate_query(const TrackerRequestParams &param);
 
 public:
 	TrackerConnection() = default;

@@ -4,7 +4,6 @@
 #include "bencode.hpp"
 #include "config.hpp"
 #include "download_strategy.hpp"
-#include "expected.hpp"
 #include "peer_connection.hpp"
 #include "peer_message.hpp"
 #include "tracker_connection.hpp"
@@ -18,7 +17,6 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <netinet/in.h>
@@ -32,11 +30,10 @@
 #include <utility>
 #include <vector>
 
-struct Peer {
-	std::string peer_id;
-	std::string ip;
-	std::string port;
-};
+auto Peer::operator<=>(const Peer &other) const
+{
+	return ip <=> other.ip;
+}
 
 struct TrackerResponse {
 	std::string failure_reason;
@@ -125,7 +122,6 @@ Download::Download(const std::string &path_to_torrent)
 	, m_dl_strategy(std::make_unique<DownloadStrategySequential>(number_of_pieces()))
 	, m_handshake(m_metainfo.info.get_sha1(), m_connection_id)
 	, m_bitfield(number_of_pieces())
-	, m_pieces(number_of_pieces())
 {
 	create_download_layout();
 	preallocate_files();
@@ -230,311 +226,276 @@ size_t Download::number_of_pieces() const
 	return m_metainfo.info.pieces.size() / 20;
 }
 
-short Download::connection_events(const TrackerConnection &connection)
+void Download::handshake_cb(size_t /*index*/, std::span<const uint8_t> view)
 {
-	// this function exists only for readability purpose
-	return POLLIN | (connection.should_wait_for_send() ? POLLOUT : 0);
-}
+	message::Handshake peer_hs(view);
 
-short Download::connection_events(const PeerConnection &connection)
-{
-	// this function exists only for readability purpose
-	return POLLIN | (connection.should_wait_for_send() ? POLLOUT : 0);
-}
-
-void Download::connect_to_new_peers(const std::vector<Peer> &peer_addrs)
-{
-	// this ugly function takes all the new peer ip+port pairs
-	// iterates over all existing slots for file descriptors in m_fds vector and
-	// if the slot is empty (i.e. it equates to -1), then it tries to connect
-	// if during the try an exception is thrown, it retries with the next ip+port pair
-	// until either it succeeds, or we run out of pairs
-
-	// I **believe** this function can not become more readable
-	// at least AI couldn't come up with anything clever
-	// but if there is a better solution without changing overall architecture,
-	// I would like to know it
-
-	static size_t times_called = 0;
-	std::clog << "connect_to_new_peers() called " << ++times_called << " times" << '\n';
-
-	auto it = peer_addrs.begin();
-	for (size_t i = 0; i < m_peer_connections.size() - 1 && it != peer_addrs.end(); ++i)
+	// todo: move validation code to handshake class
+	if (std::equal(peer_hs.get_pstr().begin(), peer_hs.get_pstr().end(),
+		       m_handshake.get_pstr().begin()) &&
+	    std::equal(peer_hs.get_info_hash().begin(), peer_hs.get_info_hash().end(),
+		       m_handshake.get_info_hash().begin()))
 	{
-		if (m_fds[i].fd == -1)
+		// everything is fine
+	}
+	else
+	{
+		std::cerr << "Invalid handshake" << '\n';
+		throw std::runtime_error("Connection terminated");
+	}
+}
+
+void Download::keepalive_cb(size_t index, std::span<const uint8_t> view)
+{
+	// not implemented
+}
+
+void Download::choke_cb(size_t index, std::span<const uint8_t> /*view*/)
+{
+	auto &conn = m_peer_connections[index];
+	conn.am_choking = true;
+	conn.reset_request_queue();
+}
+
+void Download::unchoke_cb(size_t index, std::span<const uint8_t> /*view*/)
+{
+	auto &conn = m_peer_connections[index];
+	conn.am_choking = false;
+
+	const size_t ind = m_dl_strategy->next_piece_to_dl(conn.peer_bitfield);
+	if (ind == number_of_pieces())
+	{
+		conn.send_notinterested();
+		return;
+	}
+	conn.send_interested();
+	const size_t piece_length = ind == number_of_pieces() - 1 ? m_last_piece_size :
+								    m_metainfo.info.piece_length;
+	conn.create_requests_for_piece(ind, piece_length);
+
+	(void)conn.send_request();
+}
+
+void Download::interested_cb(size_t index, std::span<const uint8_t> view)
+{
+	// not implemented
+}
+void Download::notinterested_cb(size_t index, std::span<const uint8_t> view)
+{
+	// not implemented
+}
+
+void Download::have_cb(size_t index, std::span<const uint8_t> view)
+{
+	auto &conn = m_peer_connections[index];
+	const message::Have have(view);
+	conn.peer_bitfield.set_index(have.get_index(), true);
+
+	if (conn.is_downloading())
+	{
+		// do nothing
+	}
+	else
+	{
+		if (m_dl_strategy->is_piece_missing(have))
 		{
-			while (it != peer_addrs.end())
+			conn.send_interested();
+			if (conn.am_choking)
 			{
-				auto &this_conn = m_peer_connections[i];
-				try
-				{
-					this_conn = PeerConnection(it->ip, it->port, m_handshake,
-								   m_bitfield);
-
-				} catch (const std::exception &ex)
-				{
-					++it;
-					continue;
-				}
-				++it;
-				m_fds[i] = { this_conn.get_socket_fd(),
-					     connection_events(this_conn), 0 };
-
-				break;
+				// wait for unchoke
+				return;
 			}
+			const size_t ind = m_dl_strategy->next_piece_to_dl(conn.peer_bitfield);
+			if (ind == number_of_pieces())
+			{
+				std::cerr << "Peer does not have missing pieces" << '\n';
+				return;
+			}
+
+			const size_t piece_length = ind == number_of_pieces() - 1 ?
+							    m_last_piece_size :
+							    m_metainfo.info.piece_length;
+			conn.create_requests_for_piece(ind, piece_length);
+
+			(void)conn.send_request();
 		}
 	}
-	const size_t peers_connected = std::count_if(
-		m_fds.begin(), m_fds.end(), [](const pollfd &pfd) { return pfd.fd != -1; });
-	std::clog << "Connected to " << peers_connected << " peers" << '\n';
 }
 
-void Download::tracker_callback()
+void Download::bitfield_cb(size_t index, std::span<const uint8_t> view)
 {
-	static size_t times_called = 0;
-	std::clog << "tracker_callback() called " << ++times_called << " times" << '\n';
+	auto &conn = m_peer_connections[index];
+	conn.peer_bitfield = message::Bitfield(view, m_bitfield.get_bitfield_length());
 
-	const auto span = m_tracker_connection.view_recv_message();
-	const std::string str(reinterpret_cast<const char *>(span.data()), span.size());
-	try
+	if (!m_dl_strategy->have_missing_pieces(conn.peer_bitfield))
 	{
-		// todo: rewrite this part
-		const auto resp = parse_tracker_response(str);
-		if (!resp.has_value())
-		{
-			throw std::runtime_error("parse_tracker_response() failed");
-		}
-		m_tracker_connection = {};
-		m_fds.back() = { -1, 0, 0 };
-		m_tracker_connection.set_timeout(resp->interval);
-		connect_to_new_peers(resp->peers);
-	} catch (const std::exception &ex)
+		std::clog << "Peer does not have missing pieces" << '\n';
+	}
+
+	conn.send_interested();
+}
+
+void Download::request_cb(size_t index, std::span<const uint8_t> view)
+{
+	// not implemented
+}
+
+void Download::block_cb(size_t index, std::span<const uint8_t> view)
+{
+	auto &conn = m_peer_connections[index];
+
+	int rc = conn.add_block();
+	if (rc == -1)
 	{
-		// if failed to do the callback,
-		// then try to move to next tracker
-		if (m_announce_list.move_index_next() != 0)
+		std::cerr << "Block validation failed" << '\n';
+		throw std::runtime_error("Connection terminated");
+	}
+	if (rc == 1)
+	{
+		ReceivedPiece piece = conn.get_received_piece();
+		const std::string sha1 = piece.compute_sha1();
+		const size_t ind = piece.get_index();
+
+		const std::string sha1_expected =
+			m_metainfo.info.pieces.substr(ind * utils::sha1_length, utils::sha1_length);
+		if (sha1 == sha1_expected)
 		{
-			// if it was already last tracker, close the connection
-			// and set the default timeout and return from the function
-			m_announce_list.reset_index();
-			m_tracker_connection = {};
-			m_fds.back() = { -1, 0, 0 };
-			m_tracker_connection.set_timeout(m_timeout_on_failure);
-			if (!has_peers_connected())
+			// on success
+			for (const auto &fh : m_dl_layout)
 			{
-				// but if we currently are not connected to any peers, then throw instead
-				throw std::runtime_error(
-					"Download is stalled due to tracker error");
+				int res = fh.is_piece_part_of_file(ind);
+				if (res == 0)
+				{
+					fh.write_piece(piece, m_metainfo.info.name,
+						       m_metainfo.info.piece_length);
+				}
+				if (res == 1)
+				{
+					break;
+				}
+			}
+			std::clog << "Piece " << ind << " was received" << '\n';
+		}
+		else
+		{
+			m_dl_strategy->mark_as_discarded(ind);
+			std::cerr << "Piece validation failed" << '\n';
+			throw std::runtime_error("Connection terminated");
+		}
+	}
+
+	if (conn.send_request() == 1)
+	{
+		auto ind = m_dl_strategy->next_piece_to_dl(conn.peer_bitfield);
+		if (ind == number_of_pieces())
+		{
+			if (!conn.is_downloading())
+			{
+				std::cerr << "Peer doesn't have missing pieces" << '\n';
+				throw std::runtime_error("Connection terminated");
 			}
 		}
 		else
 		{
-			// if it was not the last tracker, then we close the connection and set timeout to 1 sec
-			// after 1 second the timeout will expire and function connect_to_tracker will be called again
-			m_tracker_connection = {};
-			m_fds.back() = { -1, 0, 0 };
-			m_tracker_connection.set_timeout(1);
+			const size_t piece_length = ind == number_of_pieces() - 1 ?
+							    m_last_piece_size :
+							    m_metainfo.info.piece_length;
+			conn.create_requests_for_piece(ind, piece_length);
+			(void)conn.send_request();
 		}
 	}
 }
 
+void Download::cancel_cb(size_t index, std::span<const uint8_t> view)
+{
+	// not implemented
+}
+void Download::port_cb(size_t index, std::span<const uint8_t> view)
+{
+	// not implemented
+}
+
 void Download::peer_callback(const size_t index)
 {
-	auto &conn = m_peer_connections[index];
-	const auto request_new_pieces = [this, &conn, index]() {
-		const size_t ind = m_dl_strategy->next_piece_to_dl(conn.peer_bitfield);
-		if (ind == number_of_pieces())
-		{
-			conn.send_notinterested();
-			return;
-		}
-		size_t piece_length = ind == number_of_pieces() - 1 ? m_last_piece_size :
-								      m_metainfo.info.piece_length;
-		conn.create_requests_for_piece(ind, piece_length);
-		conn.send_initial_requests();
-		std::clog << "Requesting piece " << ind << " from peer " << index << '\n';
-	};
-
-	const auto view = conn.view_recv_message();
+	const auto view = m_peer_connections[index].view_recv_message();
 	if (view.size() <= 4)
 	{
-		//  KeepAlive
 		std::clog << "Received KeepAlive from peer" << '\n';
+		keepalive_cb(index, view);
 	}
-	else if (view.size() == 68)
+	else if (view.size() == 68 && view[0] == 19)
 	{
-		// Handshake
 		std::clog << "Received Handshake from peer" << '\n';
-		// todo: handle
+		handshake_cb(index, view);
 	}
 	else
 	{
 		switch (view[4])
 		{
 		case 0:
-			// Choke
-			{
-				std::clog << "Received Choke from peer" << '\n';
 
-				conn.am_choking = true;
-				conn.reset_request_queue();
+			std::clog << "Received Choke from peer" << '\n';
+			choke_cb(index, view);
+			break;
 
-				break;
-			}
 		case 1:
 			// Unchoke
-			{
-				std::clog << "Received Unchoke from peer" << '\n';
 
-				conn.am_choking = false;
+			std::clog << "Received Unchoke from peer" << '\n';
+			unchoke_cb(index, view);
+			break;
 
-				if (!conn.is_downloading())
-				{
-					request_new_pieces();
-				}
-
-				break;
-			}
 		case 2:
 			// Interested
 			std::clog << "Received Interested from peer" << '\n';
-
-			// ! Ignored
+			interested_cb(index, view);
 			break;
 
 		case 3:
 			// NotInterested
 			std::clog << "Received NotInterested from peer" << '\n';
-
-			// ! Ignored
+			notinterested_cb(index, view);
 			break;
 		case 4:
 			// Have
-			{
-				std::clog << "Received Have from peer" << '\n';
 
-				message::Have have(view);
-				conn.peer_bitfield.set_index(have.get_index(), true);
-				if (m_dl_strategy->is_piece_missing(have))
-				{
-					conn.send_interested();
-				}
-				if (!conn.am_choking && !conn.is_downloading())
-				{
-					request_new_pieces();
-				}
-				break;
-			}
+			std::clog << "Received Have from peer" << '\n';
+			have_cb(index, view);
+			break;
+
 		case 5:
 			// Bitfield
-			{
-				std::clog << "Received Bitfield from peer" << '\n';
 
-				conn.peer_bitfield = { view, m_bitfield.get_bitfield_length() };
-				if (m_dl_strategy->have_missing_pieces(conn.peer_bitfield))
-				{
-					conn.send_interested();
-				}
-				if (!conn.am_choking
-				    // && !conn.is_downloading()
-				)
-				{
-					request_new_pieces();
-				}
-				break;
-			}
+			std::clog << "Received Bitfield from peer" << '\n';
+			bitfield_cb(index, view);
+			break;
+
 		case 6:
 			// Request
 			std::clog << "Received Request from peer" << '\n';
-
-			// ! Ignored
+			request_cb(index, view);
 			break;
 
-		case 7: {
+		case 7:
 			// Piece
 			std::clog << "Received Piece from peer" << '\n';
-
-			std::vector<uint8_t> msg = conn.get_recv_message();
-
-			message::Piece block(std::move(msg));
-			const uint32_t ind = block.get_index();
-			m_pieces[ind].add_block(std::move(block));
-			std::clog << "Received block " << m_pieces[ind].m_pieces.size() - 1
-				  << " for piece " << ind << " meanwhile conn.m_rq_current "
-				  << conn.m_rq_current << '\n';
-
-			if (conn.send_request() != 0) // last block received
-			{
-				std::ofstream fout("testout");
-
-				for (auto &piece : m_pieces[ind].m_pieces)
-				{
-					fout.write(reinterpret_cast<const char *>(
-							   piece.get_data().data()),
-						   piece.get_data().size());
-				}
-				// check SHA1
-				const std::string sha1_received = m_pieces[ind].compute_sha1();
-				const std::string sha1_expected = m_metainfo.info.pieces.substr(
-					ind * utils::sha1_length, utils::sha1_length);
-
-				assert(sha1_received.size() == 20);
-
-				if (sha1_received != sha1_expected)
-				{ // on failed SHA1 check
-					m_dl_strategy->mark_as_discarded(ind);
-					m_pieces[ind].clear();
-					std::clog << "Piece " << ind
-						  << " discarded due to wrong SHA1" << '\n';
-				}
-				else // on successful SHA1 check
-				{
-					// write piece
-					for (const auto &fh : m_dl_layout)
-					{
-						int res = fh.is_piece_part_of_file(ind);
-						if (res == 0)
-						{
-							fh.write_piece(
-								m_pieces[ind], m_metainfo.info.name,
-								m_metainfo.info.piece_length);
-							std::clog << "Piece " << ind
-								  << " was written into the file"
-								  << '\n';
-						}
-						if (res == 1)
-						{
-							break;
-						}
-					}
-				}
-				if (!conn.am_choking)
-				{
-					request_new_pieces();
-				}
-			}
-			else
-			{
-				// probably do nothing idk
-			}
+			block_cb(index, view);
 			break;
-		}
+
 		case 8:
 			// Cancel
 			std::clog << "Received Cancel from peer" << '\n';
-
-			// ! Ignored
+			cancel_cb(index, view);
 			break;
 		case 9:
 			// Port
 			std::clog << "Received Port from peer" << '\n';
-
-			// ! Ignored
+			port_cb(index, view);
 			break;
 
 		default:
 			std::clog << "Received unknown message from peer" << '\n';
-
+			throw std::runtime_error("Connection terminated");
 			break;
 		}
 	}
@@ -542,30 +503,98 @@ void Download::peer_callback(const size_t index)
 
 void Download::proceed_peer(const size_t index)
 {
-	if ((m_fds[index].revents & POLLIN) != 0)
+	PeerConnection &peer_conn = m_peer_connections[index];
+	struct pollfd &peer_pollfd = m_fds[index];
+
+	if ((peer_pollfd.revents & POLLIN) != 0)
 	{
-		const int rc = m_peer_connections[index].recv();
+		const int rc = peer_conn.recv();
 		if (rc == 0)
 		{
 			peer_callback(index);
+			if (peer_conn.should_wait_for_send())
+			{
+				peer_pollfd.events |= POLLOUT;
+			}
 		}
 	}
 
-	if ((m_fds[index].revents & POLLOUT) != 0)
+	if ((peer_pollfd.revents & POLLOUT) != 0)
 	{
-		(void)m_peer_connections[index].send();
+		if (peer_conn.send() == 0)
+		{
+			peer_pollfd.events &= ~POLLOUT;
+		}
 	}
-	else if ((m_fds[index].revents & (POLLERR | POLLHUP)) != 0)
+	else if ((peer_pollfd.revents & (POLLERR | POLLHUP)) != 0)
 	{
 		throw std::runtime_error("Connection reset");
 	}
+}
 
-	m_fds[index].events = connection_events(m_peer_connections[index]);
+void Download::add_peers_to_backlog(std::vector<Peer> &peer_addrs)
+{
+	for (Peer &peer : peer_addrs)
+	{
+		if (m_peers_in_use_or_banned.find(peer) == m_peers_in_use_or_banned.end())
+		{
+			m_peer_backlog.emplace(std::move(peer));
+		}
+	}
+}
+
+void Download::connect_to_peer(size_t index)
+{
+	while (!m_peer_backlog.empty())
+	{
+		auto it = m_peer_backlog.begin();
+		try
+		{
+			m_peer_connections[index].connect(it->ip, it->port, m_handshake,
+							  m_bitfield);
+		} catch (const std::exception &ex)
+		{
+			// banned because failed to connect
+			m_peers_in_use_or_banned.insert(*it);
+			m_peer_backlog.extract(it);
+			// try again until backlog empty
+			continue;
+		}
+		// in use because we already connected
+		m_peers_in_use_or_banned.insert(*it);
+		m_peer_backlog.extract(it);
+		m_fds[index] = { m_peer_connections[index].get_socket_fd(), POLLIN | POLLOUT, 0 };
+		break;
+	}
+}
+
+void Download::tracker_callback()
+{
+	const auto span = m_tracker_connection.view_recv_message();
+	const std::string str(reinterpret_cast<const char *>(span.data()), span.size());
+
+	auto resp = parse_tracker_response(str);
+	if (!resp.has_value())
+	{
+		std::cerr << "parse_tracker_response() failed" << '\n';
+		if (m_announce_list.move_index_next() != 0)
+		{
+			m_announce_list.reset_index();
+			m_fds.back() = { -1, 0, 0 };
+			m_tracker_connection.set_timeout(m_timeout_on_failure);
+		}
+		throw std::runtime_error("tracker_callback() failed");
+	}
+	m_fds.back() = { -1, 0, 0 };
+	m_tracker_connection.set_timeout(resp->interval);
+	add_peers_to_backlog(resp->peers);
 }
 
 void Download::proceed_tracker()
 {
-	if ((m_fds.back().revents & POLLIN) != 0)
+	struct pollfd &tracker_pollfd = m_fds.back();
+
+	if ((tracker_pollfd.revents & POLLIN) != 0)
 	{
 		const int rc = m_tracker_connection.recv();
 
@@ -576,68 +605,63 @@ void Download::proceed_tracker()
 			m_announce_list.move_current_tracker_to_top();
 			m_announce_list.reset_index();
 
-			m_fds.back() = { -1, 0, 0 };
+			tracker_pollfd = { -1, 0, 0 };
 			return;
 		}
 	}
 
-	if ((m_fds.back().revents & POLLOUT) != 0)
+	if ((tracker_pollfd.revents & POLLOUT) != 0)
 	{
-		(void)m_tracker_connection.send();
+		const int rc = m_tracker_connection.send();
+
+		if (rc == 0)
+		{
+			tracker_pollfd.events = POLLIN;
+		}
 	}
-	else if ((m_fds.back().revents & (POLLERR | POLLHUP)) != 0)
+	else if ((tracker_pollfd.revents & (POLLERR | POLLHUP)) != 0)
 	{
 		throw std::runtime_error("Connection reset");
 	}
-
-	m_fds.back().events = connection_events(m_tracker_connection);
 }
 
 void Download::connect_to_tracker()
 {
-	std::clog << "connect_to_tracker() was called" << '\n';
+	const short ev = POLLOUT;
+	const std::string info_hash = utils::convert_to_url(m_metainfo.info.get_sha1());
+	TrackerRequestParams trp{};
+	trp.info_hash = info_hash;
+	trp.peer_id = m_connection_id;
 
-	const auto connect = [this](const std::string &hostname, const std::string &port) {
-		const std::string info_hash = utils::convert_to_url(m_metainfo.info.get_sha1());
-		m_tracker_connection =
-			TrackerConnection(hostname, port, m_connection_id, info_hash);
-		const short events = connection_events(m_tracker_connection);
-		m_fds.back() = { m_tracker_connection.get_socket_fd(), events, 0 };
-	};
-
-	while (true)
+	do
 	{
 		try
 		{
 			const auto [hostname, port] = m_announce_list.get_current_tracker();
-			connect(hostname, port);
+			m_tracker_connection.connect(hostname, port, trp);
+			m_fds.back() = { m_tracker_connection.get_socket_fd(), ev, 0 };
 			break;
 		} catch (const std::exception &ex)
 		{
-			if (m_announce_list.move_index_next() != 0)
-			{
-				// if can't connect to any tracker url
-				// then close the connection and set default timeout
-				m_announce_list.reset_index();
-				m_tracker_connection = {};
-				m_fds.back() = { -1, 0, 0 };
-				m_tracker_connection.set_timeout(m_timeout_on_failure);
-				if (!has_peers_connected())
-				{
-					// if also aren't connected to any peer, then throw
-					throw std::runtime_error(
-						"Download is stalled due to tracker error");
-				}
-				// if connected to peers, then just exit the function
-				break;
-			}
 		}
+	} while (m_announce_list.move_index_next() == 0);
+
+	if (!has_peers_connected())
+	{
+		std::cerr << "Download is stalled due to tracker error" << '\n';
 	}
+
+	m_announce_list.reset_index();
+	m_fds.back() = { -1, 0, 0 };
+	m_tracker_connection.set_timeout(m_timeout_on_failure);
 }
 
 void Download::update_time_peer(size_t index)
 {
-	m_peer_connections[index].update_time();
+	if (m_fds[index].fd != -1)
+	{
+		m_peer_connections[index].update_time();
+	}
 }
 
 void Download::update_time_tracker()
@@ -655,22 +679,43 @@ void Download::poll()
 	const int rc = ::poll(m_fds.data(), m_fds.size(), timeout);
 	if (rc > 0)
 	{
-		proceed_tracker();
 		update_time_tracker();
+		try
+		{
+			proceed_tracker();
+		} catch (const std::exception &ex)
+		{
+			connect_to_tracker();
+		}
 
 		for (size_t i = 0; i < m_fds.size() - 1; ++i)
 		{
-			try
+			if (m_fds[i].fd != -1)
 			{
-				proceed_peer(i);
-			} catch (const std::exception &ex)
-			{
-				// TODO: handle somehow
-				std::cerr << "Peer disconected due to: " << ex.what() << '\n';
-				m_fds[i] = { -1, 0, 0 };
-				m_peer_connections[i] = {};
+				try
+				{
+					proceed_peer(i);
+				} catch (const std::exception &ex)
+				{
+					std::cerr << "Peer disconected due to: " << ex.what()
+						  << '\n';
+					std::set<size_t> pieces =
+						m_peer_connections[i].assigned_pieces();
+
+					for (auto ind : pieces)
+					{
+						m_dl_strategy->mark_as_discarded(ind);
+					}
+
+					m_peer_connections[i].disconnect();
+					m_fds[i] = { -1, 0, 0 };
+				}
+				update_time_peer(i);
 			}
-			update_time_peer(i);
+			else
+			{
+				connect_to_peer(i);
+			}
 		}
 	}
 	else if (rc == 0) // on timeout
@@ -689,24 +734,24 @@ void Download::poll()
 	}
 }
 
-bool Download::has_peers_connected() const
-{
-	return std::any_of(m_fds.begin(), m_fds.end(),
-			   [](const pollfd &fd) { return fd.fd != -1; });
-}
-
 void Download::start()
 {
-	connect_to_tracker();
+	m_tracker_connection.set_timeout(-1);
 	while (true)
 	{
 		poll();
 	}
 }
 
+bool Download::has_peers_connected() const
+{
+	return std::any_of(m_fds.begin(), m_fds.end(),
+			   [](const pollfd &fd) { return fd.fd != -1; });
+}
+
 void Download::copy_metainfo_file_to_cache(const std::string &path_to_torrent)
 {
-	using namespace std::filesystem;
+	using std::filesystem::path;
 	const path torrent_name = path(path_to_torrent).filename();
 	const path path_to_destination =
 		config::get_path_to_cache_dir().append(std::string(torrent_name));
@@ -714,9 +759,4 @@ void Download::copy_metainfo_file_to_cache(const std::string &path_to_torrent)
 	{
 		copy(path_to_torrent, path_to_destination);
 	}
-}
-
-Download::AllTrackersNotRespondingError::AllTrackersNotRespondingError(const std::string &msg)
-	: std::runtime_error(msg)
-{
 }

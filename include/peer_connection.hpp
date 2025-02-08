@@ -136,6 +136,8 @@ public:
 	[[nodiscard]] int get_socket_fd() const;
 	[[nodiscard]] bool should_wait_for_send() const;
 
+	[[nodiscard]] ReceivedPiece &&get_received_piece();
+
 	[[nodiscard]] std::span<const uint8_t> view_recv_message() const;
 
 	bool update_time();

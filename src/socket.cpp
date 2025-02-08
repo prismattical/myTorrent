@@ -231,6 +231,11 @@ int TCPClient::get_fd() const
 	return m_socket;
 }
 
+bool TCPClient::connected() const
+{
+	return m_socket != -1;
+}
+
 void TCPClient::disconnect()
 {
 	if (m_socket >= 0)

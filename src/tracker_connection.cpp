@@ -16,8 +16,13 @@ TrackerConnection::TrackerConnection(const std::string &hostname, const std::str
 {
 	connect(hostname, port, param);
 }
-
-std::string generate_request(const TrackerRequestParams &param)
+/**
+ * @brief Generates query string
+ * 
+ * @param param The struct that contains data needed to generate query
+ * @return The query string
+ */
+std::string generate_query(const TrackerRequestParams &param)
 {
 	const std::string peer_id = std::string(param.peer_id.begin(), param.peer_id.end());
 
@@ -55,6 +60,11 @@ void TrackerConnection::connect(const std::string &hostname, const std::string &
 				const TrackerRequestParams &param)
 
 {
+	if (m_socket.connected())
+	{
+		m_socket.disconnect();
+	}
+
 	m_socket.connect(hostname, port);
 
 	m_send_offset = 0;

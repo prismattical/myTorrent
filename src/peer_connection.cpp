@@ -40,7 +40,7 @@ void RequestQueue::create_requests_for_piece(size_t index, size_t size)
 
 int RequestQueue::send_request(PeerConnection *parent)
 {
-	while (m_forward_req < m_current_req + max_pending)
+	while (m_forward_req < m_current_req + max_pending && m_forward_req < m_requests.size())
 	{
 		parent->add_message_to_queue(
 			std::make_unique<message::Request>(m_requests[m_forward_req]));
@@ -99,7 +99,7 @@ std::set<std::size_t> RequestQueue::assigned_pieces() const
 	return ret;
 }
 
-[[nodiscard]] bool RequestQueue::empty() const
+bool RequestQueue::empty() const
 {
 	return m_requests.empty();
 }
@@ -107,6 +107,11 @@ std::set<std::size_t> RequestQueue::assigned_pieces() const
 int PeerConnection::get_socket_fd() const
 {
 	return m_socket.get_fd();
+}
+
+ReceivedPiece &&PeerConnection::get_received_piece()
+{
+	return std::move(m_assigned_piece);
 }
 
 void PeerConnection::add_message_to_queue(std::unique_ptr<message::Message> message)
@@ -232,7 +237,10 @@ int PeerConnection::send()
 	if (m_send_offset == curr_mes.size() - 1)
 	{
 		m_send_queue.pop_front();
-		return 0;
+		if (m_request_queue.empty())
+		{
+			return 0;
+		}
 	}
 	return 1;
 }

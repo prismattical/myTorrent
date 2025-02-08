@@ -13,12 +13,20 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <poll.h>
-#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
+
+struct Peer {
+	std::string peer_id;
+	std::string ip;
+	std::string port;
+
+	auto operator<=>(const Peer &other) const;
+};
 
 class Download {
 	std::array<uint8_t, utils::id_length> m_connection_id = utils::generate_connection_id();
@@ -31,7 +39,9 @@ class Download {
 	message::Bitfield m_bitfield;
 
 	std::vector<FileHandler> m_dl_layout;
-	std::vector<ReceivedPiece> m_pieces;
+	std::set<Peer> m_peer_backlog;
+	std::set<Peer> m_peers_in_use_or_banned;
+	// std::vector<ReceivedPiece> m_pieces;
 
 	long long m_last_piece_size;
 
@@ -56,8 +66,18 @@ class Download {
 
 	[[nodiscard]] bool has_peers_connected() const;
 
-	static short connection_events(const TrackerConnection &connection);
-	static short connection_events(const PeerConnection &connection);
+	void handshake_cb(size_t index, std::span<const uint8_t> view);
+	void keepalive_cb(size_t index, std::span<const uint8_t> view);
+	void choke_cb(size_t index, std::span<const uint8_t> view);
+	void unchoke_cb(size_t index, std::span<const uint8_t> view);
+	void interested_cb(size_t index, std::span<const uint8_t> view);
+	void notinterested_cb(size_t index, std::span<const uint8_t> view);
+	void have_cb(size_t index, std::span<const uint8_t> view);
+	void bitfield_cb(size_t index, std::span<const uint8_t> view);
+	void request_cb(size_t index, std::span<const uint8_t> view);
+	void block_cb(size_t index, std::span<const uint8_t> view);
+	void cancel_cb(size_t index, std::span<const uint8_t> view);
+	void port_cb(size_t index, std::span<const uint8_t> view);
 
 	void peer_callback(size_t index);
 	void tracker_callback();
@@ -65,7 +85,8 @@ class Download {
 	void proceed_peer(size_t index);
 	void proceed_tracker();
 
-	void connect_to_new_peers(const std::vector<struct Peer> &peer_addrs);
+	void add_peers_to_backlog(std::vector<struct Peer> &peer_addrs);
+	void connect_to_peer(size_t index);
 	void connect_to_tracker();
 
 	void update_time_peer(size_t index);
@@ -74,12 +95,7 @@ class Download {
 	void poll();
 
 public:
-	Download(const std::string &path_to_torrent);
+	explicit Download(const std::string &path_to_torrent);
 
 	void start();
-
-	class AllTrackersNotRespondingError : public std::runtime_error {
-	public:
-		AllTrackersNotRespondingError(const std::string &msg);
-	};
 };

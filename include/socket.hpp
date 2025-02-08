@@ -102,6 +102,8 @@ public:
 	 */
 	[[nodiscard]] int get_fd() const;
 
+	[[nodiscard]] bool connected() const;
+
 	[[nodiscard]] std::tuple<std::string, std::string> get_peer_ip_and_port() const;
 
 	static std::string ntop(uint32_t ip);
