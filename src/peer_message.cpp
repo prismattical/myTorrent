@@ -75,6 +75,18 @@ std::span<const uint8_t> Handshake::get_peer_id() const
 	return { m_data.begin() + 1 + 19 + 8 + 20, 20 };
 }
 
+bool Handshake::is_valid(std::span<const uint8_t> info_hash)
+{
+	const char *boilerplate = "\x13"
+				  "BitTorrent protocol";
+	// part 1
+	const bool p1 = std::equal(m_data.begin(), m_data.begin() + 1 + 19, boilerplate);
+	// part 2
+	const bool p2 = std::equal(m_data.begin() + 1 + 19 + 8, m_data.begin() + 1 + 19 + 8 + 20,
+				   info_hash.begin());
+	return p1 && p2;
+}
+
 // KeepAlive
 
 std::span<const uint8_t> KeepAlive::serialized() const &
@@ -141,6 +153,35 @@ std::span<const uint8_t> Have::serialized() const &
 
 // Bitfield
 
+Bitfield::Bitfield(std::span<const uint8_t> bitfield, const size_t supposed_length)
+	: m_bitfield_length(supposed_length)
+	, m_data{ bitfield.begin(), bitfield.end() }
+{
+	// todo: validate bitfield
+	std::span<const uint8_t> bf = get_bf();
+	size_t expected_size = (supposed_length + 8 - 1) / 8;
+	if (expected_size != bf.size())
+	{
+		throw std::runtime_error("Invalid bf size");
+	}
+
+	for (size_t i = supposed_length; i < bf.size() * 8; ++i)
+	{
+		if (get_index(i))
+		{
+			throw std::runtime_error("Invalid bf trailing bits");
+		}
+	}
+}
+
+Bitfield::Bitfield(const size_t length)
+	: m_bitfield_length(length)
+	, m_data(5 + ((length - 1) / 8 + 1), 0)
+{
+	set_message_length(m_data.size() - 4);
+	m_data[4] = 5;
+}
+
 void Bitfield::set_message_length(uint32_t length)
 {
 	length = htonl(length);
@@ -154,22 +195,16 @@ uint32_t Bitfield::get_message_length() const
 	return ntohl(ret);
 }
 
-Bitfield::Bitfield(std::span<const uint8_t> bitfield, const size_t supposed_length)
-	: m_bitfield_length(supposed_length)
-	, m_data{ bitfield.begin(), bitfield.end() }
+std::span<const uint8_t> Bitfield::get_bf() const
 {
-	// todo: validate bitfield
+	return { m_data.data() + 5, m_data.size() - 5 };
+}
+std::span<uint8_t> Bitfield::get_bf()
+{
+	return { m_data.data() + 5, m_data.size() - 5 };
 }
 
-Bitfield::Bitfield(const size_t length)
-	: m_bitfield_length(length)
-	, m_data(5 + ((length - 1) / 8 + 1), 0)
-{
-	set_message_length(m_data.size() - 4);
-	m_data[4] = 5;
-}
-
-void Bitfield::set_index(const size_t index, const bool value) noexcept
+void Bitfield::set_index(const size_t index, const bool value)
 {
 	if (value)
 	{
@@ -181,17 +216,17 @@ void Bitfield::set_index(const size_t index, const bool value) noexcept
 	}
 }
 
-bool Bitfield::get_index(const size_t index) const noexcept
+bool Bitfield::get_index(const size_t index) const
 {
 	return (m_data[5 + index / 8] & static_cast<uint8_t>(1) << (7 - index % 8)) != 0;
 }
 
-size_t Bitfield::get_container_size() const
+size_t Bitfield::get_msg_size() const
 {
 	return m_data.size();
 }
 
-size_t Bitfield::get_bitfield_length() const
+size_t Bitfield::get_bf_size() const
 {
 	return m_bitfield_length;
 }

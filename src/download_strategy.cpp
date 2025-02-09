@@ -1,14 +1,19 @@
 #include "download_strategy.hpp"
+#include "expected.hpp"
 #include <algorithm>
 #include <random>
 
 DownloadStrategySequential::DownloadStrategySequential(size_t length)
-	: m_pieces_downloading(length)
+	: m_bf(length)
 	, m_endgame_pieces([length]() {
 		std::set<size_t> ret;
 		std::generate_n(std::inserter(ret, ret.end()), length,
 				[i = 0]() mutable { return i++; });
 		return ret;
+	}())
+	, m_gen([]() {
+		std::random_device rd;
+		return std::mt19937(rd());
 	}())
 {
 }
@@ -18,9 +23,9 @@ bool DownloadStrategySequential::have_missing_pieces(const message::Bitfield &bi
 	if (!m_endgame)
 	{
 		bool found_spare_piece = false;
-		for (size_t i = 0; i < m_pieces_downloading.size(); ++i)
+		for (size_t i = 0; i < m_bf.get_bf_size(); ++i)
 		{
-			if (!m_pieces_downloading[i])
+			if (!m_bf.get_index(i))
 			{
 				found_spare_piece = true;
 				if (bitfield.get_index(i))
@@ -43,44 +48,48 @@ bool DownloadStrategySequential::is_piece_missing(const message::Have &have)
 {
 	if (!m_endgame)
 	{
-		if (std::find(m_pieces_downloading.begin(), m_pieces_downloading.end(), false) !=
-		    m_pieces_downloading.end())
-		{
-			return !m_pieces_downloading[have.get_index()];
-		}
-		m_endgame = true;
+		return !m_bf.get_index(have.get_index());
 	}
 	return m_endgame_pieces.contains(have.get_index());
 }
 
-size_t DownloadStrategySequential::next_piece_to_dl(const message::Bitfield &bitfield)
+tl::expected<size_t, DownloadStrategy::ReturnStatus>
+DownloadStrategySequential::next_piece_to_dl(const message::Bitfield &bitfield)
 {
 	if (!m_endgame)
 	{
 		bool found_spare_piece = false;
-		for (size_t i = 0; i < m_pieces_downloading.size(); ++i)
+		size_t last_index = m_bf.get_bf_size() - 1;
+		if (m_bf.get_index(last_index))
 		{
-			if (!m_pieces_downloading[i])
+			found_spare_piece = true;
+			if (bitfield.get_index(last_index))
+			{
+				m_bf.set_index(last_index, true);
+				return last_index;
+			}
+		}
+		for (size_t i = 0; i < m_bf.get_bf_size(); ++i)
+		{
+			if (!m_bf.get_index(i))
 			{
 				found_spare_piece = true;
 				if (bitfield.get_index(i))
 				{
-					m_pieces_downloading[i] = true;
+					m_bf.set_index(i, true);
 					return i;
 				}
 			}
 		}
 		if (found_spare_piece)
 		{
-			return m_pieces_downloading.size();
+			return tl::make_unexpected(ReturnStatus::NO_PIECE_FOUND);
 		}
 		m_endgame = true;
-		std::random_device rd;
-		m_gen = std::mt19937(rd());
 	}
 	if (m_endgame_pieces.empty())
 	{
-		return m_pieces_downloading.size();
+		return tl::make_unexpected(ReturnStatus::DOWNLOAD_COMPLETED);
 	}
 	m_distrib =
 		std::uniform_int_distribution<>(0, static_cast<int>(m_endgame_pieces.size()) - 1);
@@ -96,5 +105,5 @@ void DownloadStrategySequential::mark_as_downloaded(const size_t index)
 
 void DownloadStrategySequential::mark_as_discarded(const size_t index)
 {
-	m_pieces_downloading[index] = false;
+	m_bf.set_index(index, false);
 }

@@ -1,6 +1,7 @@
 #include "socket.hpp"
 
 #include <arpa/inet.h>
+#include <cassert>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -205,6 +206,7 @@ long TCPClient::recv(const std::span<uint8_t> buffer) const
 
 long TCPClient::recv2(const std::span<uint8_t> buffer) const
 {
+	assert(buffer.size() > 0);
 	size_t len = buffer.size();
 	ssize_t n = ::recv(m_socket, buffer.data(), len, 0);
 
@@ -220,7 +222,8 @@ long TCPClient::recv2(const std::span<uint8_t> buffer) const
 
 	if (n <= 0)
 	{
-		throw std::runtime_error("recv() failed");
+		perror("recv2()");
+		throw std::runtime_error("recv2() failed");
 	}
 
 	return n;

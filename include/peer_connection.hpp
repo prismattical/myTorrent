@@ -47,8 +47,6 @@ private:
 		HANDSHAKE,
 		LENGTH,
 		MESSAGE,
-
-		MAX_STATES,
 	};
 
 	TCPClient m_socket;

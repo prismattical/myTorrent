@@ -1,5 +1,6 @@
 #include "config.hpp"
 #include "download_strategy.hpp"
+#include "expected.hpp"
 
 #include "file_handler.hpp"
 #include "peer_message.hpp"
@@ -34,15 +35,10 @@ TEST_F(StrategyTest, PeekingTest)
 	auto dl_strt = DownloadStrategySequential(len);
 	const message::Have have_false(0);
 	const message::Have have_true(1);
-	EXPECT_EQ(dl_strt.is_piece_missing(have_false), true);
-	EXPECT_EQ(dl_strt.is_piece_missing(have_true), true);
 
-	size_t ind = dl_strt.next_piece_to_dl(full_bf);
+	auto ind = dl_strt.next_piece_to_dl(full_bf);
 
-	EXPECT_EQ(dl_strt.is_piece_missing(have_false), false);
-	EXPECT_EQ(dl_strt.is_piece_missing(have_true), true);
-
-	dl_strt.mark_as_discarded(ind);
+	dl_strt.mark_as_discarded(ind.value());
 
 	// * This test is meant to be viewed in debugger with step-by-step execution
 	// * of each line of code. It's not about fully validating the algorithm but rather
@@ -51,7 +47,7 @@ TEST_F(StrategyTest, PeekingTest)
 	for (size_t i = 0; i < len - 10; ++i)
 	{
 		ind = dl_strt.next_piece_to_dl(full_bf);
-		dl_strt.mark_as_downloaded(ind);
+		dl_strt.mark_as_downloaded(ind.value());
 		EXPECT_EQ(ind, i);
 	}
 

@@ -156,7 +156,7 @@ int TrackerConnection::recv()
 	}
 
 	// on full recv
-	if (m_recv_offset == 0)
+	if (ret == 0)
 	{
 		m_socket.disconnect();
 		return 0;

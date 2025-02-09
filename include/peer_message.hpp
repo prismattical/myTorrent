@@ -22,17 +22,8 @@ private:
 	std::array<uint8_t, 49 + 19> m_data{ "\x13"
 					     "BitTorrent protocol" };
 
-public:
-	Handshake() = default;
-	Handshake(std::span<const uint8_t> info_hash, std::span<const uint8_t> peer_id);
-	Handshake(std::span<const uint8_t> handshake);
-
-	[[nodiscard]] std::span<const uint8_t> serialized() const & override;
-
 	[[nodiscard]] std::span<const uint8_t> get_pstrlen() const;
-
 	[[nodiscard]] std::span<const uint8_t> get_pstr() const;
-
 	[[nodiscard]] std::span<const uint8_t> get_reserved() const;
 
 	void set_info_hash(std::span<const uint8_t> info_hash);
@@ -40,6 +31,14 @@ public:
 
 	void set_peer_id(std::span<const uint8_t> peer_id);
 	[[nodiscard]] std::span<const uint8_t> get_peer_id() const;
+
+public:
+	Handshake() = default;
+	Handshake(std::span<const uint8_t> info_hash, std::span<const uint8_t> peer_id);
+	explicit Handshake(std::span<const uint8_t> handshake);
+
+	[[nodiscard]] std::span<const uint8_t> serialized() const & override;
+	[[nodiscard]] bool is_valid(std::span<const uint8_t> info_hash);
 };
 
 struct KeepAlive final : public Message {
@@ -110,8 +109,11 @@ private:
 	 * to number of pieces in a given download. If it is not a multiple of 8,
 	 * then all spare fields must be set to 0
 	 */
-	size_t m_bitfield_length;
-	std::vector<uint8_t> m_data;
+	size_t m_bitfield_length = 0;
+	std::vector<uint8_t> m_data = { 0, 0, 0, 1, 5 };
+
+	[[nodiscard]] std::span<const uint8_t> get_bf() const;
+	[[nodiscard]] std::span<uint8_t> get_bf();
 
 	void set_message_length(uint32_t length);
 	[[nodiscard]] uint32_t get_message_length() const;
@@ -127,18 +129,18 @@ public:
 	* 
 	* @param length an amount of pieces
 	*/
-	Bitfield(size_t length);
+	explicit Bitfield(size_t length);
 
-	void set_index(size_t index, bool value) noexcept;
-	[[nodiscard]] bool get_index(size_t index) const noexcept;
+	void set_index(size_t index, bool value);
+	[[nodiscard]] bool get_index(size_t index) const;
 	/**
 	 * @brief Get the size of underlying container (in bytes)
 	 */
-	[[nodiscard]] size_t get_container_size() const;
+	[[nodiscard]] size_t get_msg_size() const;
 	/**
 	 * @brief Get the bitfield length (in bits)
 	 */
-	[[nodiscard]] size_t get_bitfield_length() const;
+	[[nodiscard]] size_t get_bf_size() const;
 
 	[[nodiscard]] std::span<const uint8_t> serialized() const & override;
 };

@@ -131,9 +131,21 @@ void PeerConnection::connect(const std::string &ip, const std::string &port,
 {
 	m_socket.connect(ip, port);
 
-	peer_bitfield = message::Bitfield(bitfield.get_bitfield_length());
+	peer_bitfield = message::Bitfield(bitfield.get_bf_size());
 	add_message_to_queue(std::make_unique<message::Handshake>(handshake));
 	add_message_to_queue(std::make_unique<message::Bitfield>(bitfield));
+
+	m_recv_offset = 0;
+	m_send_offset = 0;
+	m_message_length = 0;
+	m_state = States::HANDSHAKE;
+	m_failures = 0;
+	m_am_interested = false;
+	m_peer_choking = true;
+	am_choking = true;
+	peer_interested = false;
+	m_request_queue.reset();
+	m_assigned_piece.clear();
 }
 
 void PeerConnection::disconnect()
@@ -159,7 +171,7 @@ int PeerConnection::recv()
 
 		m_recv_offset += rc;
 
-		if (m_recv_offset == hs_len - 1)
+		if (m_recv_offset == hs_len)
 		{
 			m_recv_offset = 0;
 			m_state = States::LENGTH;
@@ -179,7 +191,7 @@ int PeerConnection::recv()
 
 		m_recv_offset += rc;
 
-		if (m_recv_offset != length_len - 1)
+		if (m_recv_offset != length_len)
 		{
 			return 1;
 		}
@@ -207,7 +219,7 @@ int PeerConnection::recv()
 
 		m_recv_offset += rc;
 
-		if (m_recv_offset == m_message_length - 1)
+		if (m_recv_offset == m_message_length)
 		{
 			m_recv_offset = 0;
 			m_state = States::LENGTH;
@@ -215,8 +227,6 @@ int PeerConnection::recv()
 		}
 		return 1;
 	}
-	default:
-		throw std::runtime_error("Invalid state value");
 	}
 	return 1;
 }
@@ -234,7 +244,7 @@ int PeerConnection::send()
 
 	m_send_offset += rc;
 
-	if (m_send_offset == curr_mes.size() - 1)
+	if (m_send_offset == curr_mes.size())
 	{
 		m_send_queue.pop_front();
 		if (m_request_queue.empty())
