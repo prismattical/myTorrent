@@ -1,6 +1,5 @@
 #pragma once
 
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -27,7 +26,7 @@ public:
 	 * 
 	 * This method should be called with data read from metainfo file
 	 */
-	AnnounceList(std::vector<std::vector<std::string>> &&announce_list);
+	explicit AnnounceList(std::vector<std::vector<std::string>> &&announce_list);
 
 	/**
 	 * @brief Set index to first URL in first tier

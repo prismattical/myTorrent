@@ -36,7 +36,7 @@ public:
 	std::vector<FileInfo> files;
 
 	InfoDict() = default;
-	InfoDict(bencode::data &source);
+	explicit InfoDict(bencode::data &source);
 
 	[[nodiscard]] std::span<const uint8_t> get_sha1() const;
 };
@@ -55,5 +55,5 @@ public:
 	std::string comment;
 	std::string created_by;
 
-	MetainfoFile(const std::string &path_to_metainfo_file);
+	explicit MetainfoFile(const std::string &path_to_metainfo_file);
 };

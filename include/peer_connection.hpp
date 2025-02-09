@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
-#include <optional>
 #include <set>
 #include <span>
 #include <vector>

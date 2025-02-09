@@ -3,7 +3,6 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
 #include <span>
 #include <vector>
 
@@ -91,8 +90,8 @@ private:
 	std::array<uint8_t, 9> m_data{ 0, 0, 0, 5, 4 };
 
 public:
-	Have(uint32_t index);
-	Have(std::span<const uint8_t> have);
+	explicit Have(uint32_t index);
+	explicit Have(std::span<const uint8_t> have);
 
 	void set_index(uint32_t index);
 	[[nodiscard]] uint32_t get_index() const;
@@ -154,7 +153,7 @@ private:
 public:
 	Request() = default;
 	Request(uint32_t index, uint32_t begin, uint32_t length);
-	Request(std::span<const uint8_t> request);
+	explicit Request(std::span<const uint8_t> request);
 
 	void set_index(uint32_t index);
 	[[nodiscard]] uint32_t get_index() const;
@@ -173,10 +172,7 @@ private:
 
 public:
 	// creates piece from received message
-	Piece(std::vector<uint8_t> &&piece);
-
-	// creates piece from file
-	Piece(std::ofstream &file, uint32_t index, uint32_t begin, uint32_t length);
+	explicit Piece(std::vector<uint8_t> &&piece);
 
 	Piece(const Piece &) = delete; // make it non-copyable so any possible copy
 	Piece &operator=(const Piece &) = delete; // will not go silent
@@ -201,7 +197,7 @@ private:
 public:
 	Cancel() = default;
 	Cancel(uint32_t index, uint32_t begin, uint32_t length);
-	Cancel(std::span<const uint8_t> cancel);
+	explicit Cancel(std::span<const uint8_t> cancel);
 
 	void set_index(uint32_t index);
 	[[nodiscard]] uint32_t get_index() const;
@@ -219,7 +215,7 @@ private:
 	std::array<uint8_t, 7> m_data{ 0, 0, 0, 3, 9 };
 
 public:
-	Port(uint16_t port);
+	explicit Port(uint16_t port);
 
 	void set_port(uint16_t port);
 	[[nodiscard]] uint16_t get_port() const;

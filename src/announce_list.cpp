@@ -2,8 +2,6 @@
 
 #include "utils.hpp"
 
-#include <tuple>
-
 // AnnounceList ------------------------------------------------------------------------
 
 AnnounceList::AnnounceList(std::vector<std::vector<std::string>> &&announce_list)
@@ -59,7 +57,7 @@ std::pair<std::string, std::string> AnnounceList::get_current_tracker() const
 
 	const auto [protocol, domain_name, port] = utils::parse_announce_url(announce_url);
 
-	// TODO: handle non-http protocols
+	// todo: handle non-http protocols
 
 	return { domain_name, port };
 }

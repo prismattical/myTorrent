@@ -1,6 +1,7 @@
 #include "download_strategy.hpp"
 #include "expected.hpp"
 #include <algorithm>
+#include <iostream>
 #include <random>
 
 DownloadStrategySequential::DownloadStrategySequential(size_t length)
@@ -66,6 +67,8 @@ DownloadStrategySequential::next_piece_to_dl(const message::Bitfield &bitfield)
 			if (bitfield.get_index(last_index))
 			{
 				m_bf.set_index(last_index, true);
+				std::clog << "Piece " << last_index << " will be downloaded"
+					  << '\n';
 				return last_index;
 			}
 		}
@@ -77,6 +80,7 @@ DownloadStrategySequential::next_piece_to_dl(const message::Bitfield &bitfield)
 				if (bitfield.get_index(i))
 				{
 					m_bf.set_index(i, true);
+					std::clog << "Piece " << i << " will be downloaded" << '\n';
 					return i;
 				}
 			}

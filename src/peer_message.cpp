@@ -1,7 +1,5 @@
 #include "peer_message.hpp"
 
-#include "utils.hpp"
-
 #include <arpa/inet.h>
 #include <array>
 #include <netinet/in.h>
@@ -11,11 +9,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
 #include <span>
 #include <stdexcept>
-#include <string>
-#include <string_view>
+
 #include <utility>
 #include <vector>
 
@@ -141,7 +137,7 @@ void Have::set_index(uint32_t index)
 }
 uint32_t Have::get_index() const
 {
-	uint32_t index;
+	uint32_t index = 0;
 	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
 	return ntohl(index);
 }
@@ -190,7 +186,7 @@ void Bitfield::set_message_length(uint32_t length)
 
 uint32_t Bitfield::get_message_length() const
 {
-	uint32_t ret;
+	uint32_t ret = 0;
 	memcpy(&ret, m_data.data(), sizeof ret);
 	return ntohl(ret);
 }
@@ -256,7 +252,7 @@ void Request::set_index(uint32_t index)
 }
 uint32_t Request::get_index() const
 {
-	uint32_t index;
+	uint32_t index = 0;
 	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
 	return ntohl(index);
 }
@@ -267,7 +263,7 @@ void Request::set_begin(uint32_t begin)
 }
 uint32_t Request::get_begin() const
 {
-	uint32_t begin;
+	uint32_t begin = 0;
 	memcpy(&begin, m_data.data() + 4 + 1 + 4, sizeof begin);
 	return ntohl(begin);
 }
@@ -278,7 +274,7 @@ void Request::set_length(uint32_t length)
 }
 uint32_t Request::get_length() const
 {
-	uint32_t length;
+	uint32_t length = 0;
 	memcpy(&length, m_data.data() + 4 + 1 + 4 + 4, sizeof length);
 	return ntohl(length);
 }
@@ -292,7 +288,7 @@ message::Cancel Request::create_cancel() const
 {
 	std::array<uint8_t, 17> ret = m_data;
 	ret[4] = 8;
-	return { ret };
+	return message::Cancel(std::span<const uint8_t>(ret.data(), ret.size()));
 }
 
 // Piece
@@ -309,7 +305,7 @@ void Piece::set_index(uint32_t index)
 }
 uint32_t Piece::get_index() const
 {
-	uint32_t index;
+	uint32_t index = 0;
 	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
 	return ntohl(index);
 }
@@ -320,7 +316,7 @@ void Piece::set_begin(uint32_t begin)
 }
 uint32_t Piece::get_begin() const
 {
-	uint32_t begin;
+	uint32_t begin = 0;
 	memcpy(&begin, m_data.data() + 4 + 1 + 4, sizeof begin);
 	return ntohl(begin);
 }
@@ -359,7 +355,7 @@ void Cancel::set_index(uint32_t index)
 }
 uint32_t Cancel::get_index() const
 {
-	uint32_t index;
+	uint32_t index = 0;
 	memcpy(&index, m_data.data() + 4 + 1, sizeof index);
 	return ntohl(index);
 }
@@ -370,7 +366,7 @@ void Cancel::set_begin(uint32_t begin)
 }
 uint32_t Cancel::get_begin() const
 {
-	uint32_t begin;
+	uint32_t begin = 0;
 	memcpy(&begin, m_data.data() + 4 + 1 + 4, sizeof begin);
 	return ntohl(begin);
 }
@@ -381,7 +377,7 @@ void Cancel::set_length(uint32_t length)
 }
 uint32_t Cancel::get_length() const
 {
-	uint32_t length;
+	uint32_t length = 0;
 	memcpy(&length, m_data.data() + 4 + 1 + 4 + 4, sizeof length);
 	return ntohl(length);
 }
@@ -395,7 +391,7 @@ message::Request Cancel::create_request() const
 {
 	std::array<uint8_t, 17> ret = m_data;
 	ret[4] = 6;
-	return { ret };
+	return message::Request(std::span<uint8_t>(ret));
 }
 
 // Port
@@ -412,7 +408,7 @@ void Port::set_port(uint16_t port)
 }
 uint16_t Port::get_port() const
 {
-	uint16_t port;
+	uint16_t port = 0;
 	memcpy(&port, m_data.data() + 4 + 1, sizeof port);
 	return ntohs(port);
 }

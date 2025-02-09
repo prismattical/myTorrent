@@ -1,3 +1,12 @@
+/**
+ * @file dlstrategy.cpp
+ * @brief 
+ * 
+ * * These are not **real** tests. I used testing framework for opening 
+ * * isolated functions in debugger and watching whether they do 
+ * * unexpected things or not
+ */
+
 #include "config.hpp"
 #include "download_strategy.hpp"
 #include "expected.hpp"
@@ -39,10 +48,6 @@ TEST_F(StrategyTest, PeekingTest)
 	auto ind = dl_strt.next_piece_to_dl(full_bf);
 
 	dl_strt.mark_as_discarded(ind.value());
-
-	// * This test is meant to be viewed in debugger with step-by-step execution
-	// * of each line of code. It's not about fully validating the algorithm but rather
-	// * clarifying that no unexpected things happen
 
 	for (size_t i = 0; i < len - 10; ++i)
 	{

@@ -27,7 +27,6 @@
 #include <stdexcept>
 #include <string>
 #include <sys/poll.h>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -128,7 +127,7 @@ Download::Download(const std::string &path_to_torrent)
 {
 	create_download_layout();
 	preallocate_files();
-	check_layout();
+	// check_layout();
 }
 
 void Download::create_download_layout()
@@ -245,7 +244,7 @@ void Download::handshake_cb(size_t /*index*/, std::span<const uint8_t> view)
 	}
 }
 
-void Download::keepalive_cb(size_t index, std::span<const uint8_t> view)
+void Download::keepalive_cb(size_t /*index*/, std::span<const uint8_t> /*view*/)
 {
 	// not implemented
 }
@@ -274,6 +273,7 @@ void Download::unchoke_cb(size_t index, std::span<const uint8_t> /*view*/)
 		switch (err)
 		{
 		case DownloadStrategy::ReturnStatus::NO_PIECE_FOUND:
+			std::cerr << "Unchoke: no pieces to found to download" << '\n';
 			conn.send_notinterested();
 			return;
 		case DownloadStrategy::ReturnStatus::DOWNLOAD_COMPLETED:
@@ -286,13 +286,14 @@ void Download::unchoke_cb(size_t index, std::span<const uint8_t> /*view*/)
 	conn.create_requests_for_piece(ind.value(), piece_length);
 
 	(void)conn.send_request();
+	std::cerr << "Unchoke: placed requests into queue" << '\n';
 }
 
-void Download::interested_cb(size_t index, std::span<const uint8_t> view)
+void Download::interested_cb(size_t /*index*/, std::span<const uint8_t> /*view*/)
 {
 	// not implemented
 }
-void Download::notinterested_cb(size_t index, std::span<const uint8_t> view)
+void Download::notinterested_cb(size_t /*index*/, std::span<const uint8_t> /*view*/)
 {
 	// not implemented
 }
@@ -354,12 +355,12 @@ void Download::bitfield_cb(size_t index, std::span<const uint8_t> view)
 	conn.send_interested();
 }
 
-void Download::request_cb(size_t index, std::span<const uint8_t> view)
+void Download::request_cb(size_t /*index*/, std::span<const uint8_t> /*view*/)
 {
 	// not implemented
 }
 
-void Download::block_cb(size_t index, std::span<const uint8_t> view)
+void Download::block_cb(size_t index, std::span<const uint8_t> /*view*/)
 {
 	auto &conn = m_peer_connections[index];
 
@@ -408,6 +409,7 @@ void Download::block_cb(size_t index, std::span<const uint8_t> view)
 		auto ind = m_dl_strategy->next_piece_to_dl(conn.peer_bitfield);
 		if (!ind)
 		{
+			std::cerr << "Piece_cb: error during send_request()" << '\n';
 			const auto err = ind.error();
 			switch (err)
 			{
@@ -429,11 +431,11 @@ void Download::block_cb(size_t index, std::span<const uint8_t> view)
 	}
 }
 
-void Download::cancel_cb(size_t index, std::span<const uint8_t> view)
+void Download::cancel_cb(size_t /*index*/, std::span<const uint8_t> /*view*/)
 {
 	// not implemented
 }
-void Download::port_cb(size_t index, std::span<const uint8_t> view)
+void Download::port_cb(size_t /*index*/, std::span<const uint8_t> /*view*/)
 {
 	// not implemented
 }
@@ -544,9 +546,9 @@ void Download::proceed_peer(const size_t index)
 
 	if ((peer_pollfd.revents & POLLOUT) != 0)
 	{
+		assert(peer_conn.should_wait_for_send() == true);
 		if (peer_conn.send() == 0)
 		{
-			std::cerr << "Successfully sent an entire msg to peer" << '\n';
 			peer_pollfd.events &= ~POLLOUT;
 		}
 	}
@@ -729,8 +731,8 @@ void Download::poll()
 					proceed_peer(i);
 				} catch (const std::exception &ex)
 				{
-					std::cerr << "Peer disconected due to: " << ex.what()
-						  << '\n';
+					std::cerr << "Peer " << i
+						  << " disconected due to: " << ex.what() << '\n';
 					std::set<size_t> pieces =
 						m_peer_connections[i].assigned_pieces();
 

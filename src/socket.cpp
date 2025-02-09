@@ -222,8 +222,7 @@ long TCPClient::recv2(const std::span<uint8_t> buffer) const
 
 	if (n <= 0)
 	{
-		perror("recv2()");
-		throw std::runtime_error("recv2() failed");
+		throw std::runtime_error(std::string("recv2() failed: ") + strerror(errno));
 	}
 
 	return n;

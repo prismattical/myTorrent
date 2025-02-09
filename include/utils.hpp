@@ -21,8 +21,6 @@ inline constexpr size_t id_length = 20;
  * SHA1 is a hash value that is 20 bytes long. This function takes a *single* chunk of data,
  * computes the hash, creates and returns an array that stores the value.
  * 
- * ! This function may segfault for unknown for me reason after several successful calls
- * ! during one execution
  */
 [[nodiscard]] std::array<uint8_t, sha1_length> compute_sha1(std::span<const uint8_t> input);
 

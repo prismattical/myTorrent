@@ -13,11 +13,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <poll.h>
 #include <string>
-#include <tuple>
 #include <vector>
 
 struct Peer {
@@ -43,7 +41,7 @@ class Download {
 	std::set<Peer> m_peers_in_use_or_banned;
 	// std::vector<ReceivedPiece> m_pieces;
 
-	long long m_last_piece_size;
+	long long m_last_piece_size = 0;
 
 	static constexpr int m_max_peers = 10;
 

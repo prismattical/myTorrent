@@ -10,10 +10,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <memory>
 #include <netinet/in.h>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -64,6 +64,7 @@ int RequestQueue::validate_block(const message::Piece &block)
 	if (!res)
 	{
 		// block is invalid
+		std::cerr << "Invalid block received" << '\n';
 		return -1;
 	}
 
@@ -236,7 +237,6 @@ int PeerConnection::send()
 	std::span<const std::uint8_t> curr_mes = m_send_queue.front()->serialized();
 	long rc =
 		m_socket.send({ curr_mes.data() + m_send_offset, curr_mes.size() - m_send_offset });
-
 	if (rc == -1)
 	{
 		return 1;
@@ -247,7 +247,8 @@ int PeerConnection::send()
 	if (m_send_offset == curr_mes.size())
 	{
 		m_send_queue.pop_front();
-		if (m_request_queue.empty())
+		m_send_offset = 0;
+		if (!should_wait_for_send())
 		{
 			return 0;
 		}
