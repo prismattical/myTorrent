@@ -1,0 +1,8 @@
+Diagnostics:
+    ClangTidy:
+        Add: [bugprone-*, readability-*, misc-*, modernize-*, performance-*, cppcoreguidelines-*, google-* ]
+        Remove: [ modernize-use-trailing-return-type, readability-identifier-length, bugprone-easily-swappable-parameters, 
+            misc-non-private-member-variables-in-classes, readability-magic-numbers, cppcoreguidelines-avoid-magic-numbers, 
+            google-runtime-int, cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-pro-type-vararg, 
+            cppcoreguidelines-avoid-do-while]
+        CheckOptions: {cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor: true}

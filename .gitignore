@@ -5,7 +5,6 @@ build/
 .vscode/
 .cache/
 myTorrent
-.clangd
 *.torrent
 *_unittest
 *_test
