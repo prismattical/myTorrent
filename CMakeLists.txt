@@ -5,11 +5,12 @@ set(CMAKE_CXX_STANDARD 20)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+option(BUILD_TESTS "Enable building tests" OFF) # OFF by default
+
 if(CMAKE_COMPILER_IS_GNUCXX)
   add_compile_options(-Wall -Wextra -pedantic)
 endif()
 
-include(CTest)
 set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
 find_package(OpenSSL REQUIRED)
@@ -27,30 +28,34 @@ set(HEADER_FILES include/config.hpp include/utils.hpp include/socket.hpp include
     )
 
 add_executable(myTorrent src/main.cpp ${EXTERNAL_LIBS} ${SOURCE_FILES} ${HEADER_FILES})
-
 target_link_libraries(myTorrent OpenSSL::SSL)
 
-include(FetchContent)
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
-)
-# For Windows: Prevent overriding the parent project's compiler/linker settings
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
-
-add_executable(dlstrategy_test test/dlstrategy.cpp ${EXTERNAL_LIBS} ${SOURCE_FILES} ${HEADER_FILES})
-
-target_link_libraries(
-  dlstrategy_test
-  GTest::gtest_main
-  OpenSSL::SSL
-)
-
-include(GoogleTest)
-gtest_discover_tests(dlstrategy_test)
-
-add_test(NAME DLStrategy COMMAND dlstrategy_test)
-
 target_include_directories(myTorrent PRIVATE include/ external/)
-target_include_directories(dlstrategy_test PRIVATE include/ external/)
+
+
+if(BUILD_TESTS)
+  include(CTest)
+
+  include(FetchContent)
+  FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
+  )
+  # For Windows: Prevent overriding the parent project's compiler/linker settings
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(googletest)
+  add_executable(dlstrategy_test test/dlstrategy.cpp ${EXTERNAL_LIBS} ${SOURCE_FILES} ${HEADER_FILES})
+  target_link_libraries(
+    dlstrategy_test
+    GTest::gtest_main
+    OpenSSL::SSL
+  )
+
+  include(GoogleTest)
+  gtest_discover_tests(dlstrategy_test)
+
+  add_test(NAME DLStrategy COMMAND dlstrategy_test)
+
+  target_include_directories(dlstrategy_test PRIVATE include/ external/)
+endif()
+
